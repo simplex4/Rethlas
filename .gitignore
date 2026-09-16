@@ -1,3 +1,5 @@
+# Modified in 2026 to exclude ChatGPT MCP credentials, workflow state, and environments.
+
 # Python
 __pycache__/
 *.py[cod]
@@ -9,6 +11,7 @@ __pycache__/
 htmlcov/
 
 # Virtual environments
+.venv-chatgpt/
 .venv/
 venv/
 env/
@@ -29,6 +32,9 @@ Thumbs.db
 *.p12
 *.pfx
 
+# ChatGPT MCP state, credentials, exports, and locks
+.local/chatgpt-workflow/
+
 # Agent runtime artifacts
 agents/generation/logs/
 agents/generation/memory/
@@ -39,7 +45,7 @@ agents/verification/logs/
 agents/verification/memory/
 agents/verification/results/
 
-# Zola build output and downloaded theme are ignored by agents/generation/site/.gitignore too.
+# Zola build output and downloaded theme
 agents/generation/site/public/
 agents/generation/site/themes/
 agents/generation/site/content/*/

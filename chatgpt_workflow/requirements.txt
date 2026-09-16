@@ -1,0 +1,5 @@
+# Added in 2026 for the isolated Rethlas ChatGPT MCP environment.
+mcp==1.29.1
+httpx==0.28.1
+pydantic==2.13.5
+typing-extensions==4.16.0

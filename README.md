@@ -1,159 +1,116 @@
+<!-- Modified in 2026 for ChatGPT MCP integration, GPT-6 Astra defaults, and resumable Codex execution. -->
+
 # Rethlas
 
-Rethlas is a natural-language reasoning system for mathematics built around two Codex agents:
+Rethlas is a natural-language mathematics research workflow with two supported modes:
 
-- The generation agent reads a math problem from a markdown file and writes an informal proof blueprint.
-- The verification agent checks that proof blueprint, produces a structured verdict, and serves as the generation agent's verifier.
+- **Codex mode** runs a proof-generation agent and a separate verification service locally.
+- **ChatGPT MCP mode** uses two user-started ChatGPT conversations, one for generation and one for verification, with durable local state shared through MCP.
 
-The intended deployment order is:
+Both modes preserve the original informal-proof output format. ChatGPT MCP mode does not call an inference API or launch ChatGPT by itself.
 
-1. Start the verification agent as a local HTTP service.
-2. Run the generation agent through Codex.
-3. Let the generation agent call the verification service during its proof-and-repair loop.
+## Requirements
 
-## Repository Layout
+### Codex mode
 
-- `agents/generation`: the proof-generation agent
-- `agents/verification`: the proof-verification agent
+- Codex CLI
+- Python 3.11 or newer
+- the Python packages listed under `agents/generation/mcp/` and `agents/verification/`
+- `pdftotext` only when using PDF references
+- Zola only when using the optional result website
 
-In particular, 
-- Original problems are put in `agents/generation/data/`, e.g. unclassified problem `agents/generation/data/example.md`, or classfied problem `agents/generation/data/modrep/modrep.md`, `agents/generation/data/example/example1.md`.
-- Zola project to render the results in a static website is in `agents/generation/site/`.
+### ChatGPT MCP mode
 
-## 1. Install Codex CLI
+- Python 3.11 or newer
+- the packages in `chatgpt_workflow/requirements.txt`
+- a ChatGPT-compatible MCP connector or private tunnel for connecting ChatGPT to the local server
+- `pdftotext` only for PDF text extraction
 
-Install the Codex CLI:
+The repository does not bundle Codex, Python environments, Zola, `pdftotext`, ChatGPT, or an MCP tunnel.
 
-```bash
-npm install -g @openai/codex
-```
+## Codex mode
 
+The generator, verifier, and subgoal prover default to [`gpt-6-astra`](https://developers.openai.com/api/docs/models/gpt-6-astra) with `max` reasoning. Generator overrides are `MODEL` and `REASONING_EFFORT`; verifier overrides are `CODEX_MODEL` and `CODEX_REASONING_EFFORT`.
 
-## 2. Clone the Repository
+Start the verifier:
 
-```bash
-git clone https://github.com/frenzymath/Rethlas.git
-cd Rethlas
-```
-
-## 3. Start the Verification Service
-
-
-```bash
+```sh
 cd agents/verification
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn api.server:app --host 0.0.0.0 --port 8091
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+uvicorn api.server:app --host 127.0.0.1 --port 8091
 ```
 
-Using uv
-```bash
-cd agents/verification
-uv venv 
-uv pip install -r requirements.txt
-uv run uvicorn api.server:app --host 0.0.0.0 --port 8091
-```
+In another terminal, run the included example:
 
-## 4. Run the Generation Agent on the Included Example
-
-
-```bash
+```sh
 cd agents/generation
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r mcp/requirements.txt
+. .venv/bin/activate
+python -m pip install -r mcp/requirements.txt
 ./tests/run_example.sh
 ```
 
-This script:
+The runner alternates search-disabled and search-enabled continuation turns, writes append-only iteration logs, and stops when `results/<problem_id>/blueprint_verified.md` exists. It supports dry-run validation, pausing, and automatic continuation from existing logs. See [the Codex workflow guide](docs/codex-workflow.md).
 
-- reads `agents/generation/data/example.md`
-- runs `codex exec` inside `agents/generation`
-- resumes the same Codex session for up to `MAX_ITERATIONS` iterations, alternating search-disabled and search-enabled continuation turns
-- stops when `agents/generation/results/example/blueprint_verified.md` is produced
-- writes iteration logs to `agents/generation/logs/example/iter/`
-- writes memory artifacts to `agents/generation/memory/example/`
-- writes the draft proof to `agents/generation/results/example/blueprint.md`
-- writes the verified proof to `agents/generation/results/example/blueprint_verified.md` if verification succeeds
+## ChatGPT MCP mode
 
-You can set the maximum number of iterations:
+Create its isolated environment at the repository root:
 
-```bash
-MAX_ITERATIONS=10 ./tests/run_example.sh
+```sh
+python3 -m venv .venv-chatgpt
+.venv-chatgpt/bin/python -m pip install -r chatgpt_workflow/requirements.txt
 ```
 
-## 5. Run Your Own Problem
+Import the included example and issue separate role keys:
 
-Put your problem in a markdown file under `agents/generation/data/`. Save that as:
-
-```text
-agents/generation/data/my_problem.md
+```sh
+sh chatgpt_workflow/run.sh --import-problem example
+sh chatgpt_workflow/run.sh --issue-key example --role generation --label example-generator
+sh chatgpt_workflow/run.sh --issue-key example --role verification --label example-verifier
 ```
 
-Then run:
+Open a run locally with a printed credential ID, then give the returned `run_id` and that role's secret `access_key` only to its intended ChatGPT conversation:
 
-```bash
+```sh
+sh chatgpt_workflow/run.sh --open-run credential-REPLACE_WITH_ID
+```
+
+Start the MCP server over stdio:
+
+```sh
+sh chatgpt_workflow/run.sh
+```
+
+For a connector that expects local HTTP instead:
+
+```sh
+sh chatgpt_workflow/run.sh --transport streamable-http --port 8766
+```
+
+The HTTP server binds to `127.0.0.1`. Keep any tunnel private and access-controlled. Every workflow call requires both the role/problem key and an active, credential-bound run ID. Finished and cancelled runs reject later calls.
+
+See [the complete ChatGPT workflow](docs/chatgpt-workflow.md) and [run authorization and research storage](docs/chatgpt-runs.md).
+
+## Repository layout
+
+- `agents/generation/`: original Codex generation agent, skills, MCP memory server, example, runner, and site renderer
+- `agents/verification/`: original Codex verification agent and HTTP/MCP services
+- `chatgpt_workflow/`: production two-conversation MCP state and authorization service
+- `docs/`: setup, handoff, pause, resume, security, and export guidance
+
+## Output and rendering
+
+Both modes export accepted proofs under `agents/generation/results/<problem_id>/`. To render results with Zola:
+
+```sh
 cd agents/generation
-source .venv/bin/activate
-PROBLEM_FILE=data/my_problem.md ./tests/run_example.sh
-```
-
-You can group problems in subdirectories under `data/` and the generated artifacts preserve that structure. For example:
-
-```bash
-PROBLEM_FILE=data/modrep/modrep.md ./tests/run_example.sh
-```
-
-To attach user-provided references to a problem (this is optional; use it when you are working on your own research problem and want to provide the agent with unreleased notes), create a sibling reference directory with the same stem:
-
-```text
-agents/generation/data/modrep/modrep.refs/
-```
-
-When that directory exists, the generation agent reads its files before using external search.
-Reference files may be markdown, LaTeX, plain text, or PDF, but markdown, LaTeX and plain text is prefered over PDF. Actually, PDFs are converted to extracted text under `.extracted/` before the agent runs.
-
-## 6. View Results in the Browser
-
-- `agents/generation/site`: Zola site for browsing results in the browser
-
-Results are markdown files with LaTeX math. To render them properly, a local [Zola](https://www.getzola.org/) site using the [MATbook](https://www.getzola.org/themes/matbook/) theme is included.
-
-### Prerequisites
-
-Install Zola.
-
-Zola can be easily installed using your package manager in terminal. For example, on Mac, you simply run
-
-```bash
-brew install zola
-```
-
-and on ArchLinux, run
-
-```bash
-sudo pacman -S zola
-```
-
-For other operating systems, please see [Zola installation](https://www.getzola.org/documentation/getting-started/installation/).
-
-### Serve
-
-From `agents/generation/`:
-
-```bash
 ./site/serve.sh
 ```
 
-On first run this automatically clones the [MATbook](https://www.getzola.org/themes/matbook/) theme. Then it syncs all results from `results/` into the site and starts a local server. Open http://localhost:3264 in your browser.
+The first run downloads the MATbook theme. Open `http://localhost:3264` after Zola starts.
 
-Each problem  in `agents/generation/data/your_category`  will be a section in a chapter called `your_category`, while problems directly in `agents/generation/data` will be under `unclassified` chapter.
+## License
 
-### Update the MATbook Theme
-
-```bash
-./site/setup_theme.sh
-```
-
-This pulls the latest version from the [MATbook repository](https://github.com/srliu3264/MATbook).
+This distribution is licensed under Apache License 2.0. See `LICENSE` and `NOTICE`. Existing upstream files changed by this release carry a prominent modification notice.
