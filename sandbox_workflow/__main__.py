@@ -12,6 +12,7 @@ import uuid
 
 from .core import (PACKAGE, REPO, Workflow, WorkflowError, atomic, codex_home,
                    command, parse_events, read_json, settings, sha)
+from .timer import ElapsedTimer
 
 
 def diagnostic(cmd, env):
@@ -43,6 +44,7 @@ def doctor(live=False):
     workspace = REPO / ".local" / "sandbox-workflow" / "probes" / uuid.uuid4().hex
     workspace.mkdir(parents=True)
     shutil.copy2(PACKAGE / "research.py", workspace / "research.py")
+    shutil.copy2(PACKAGE / "research_contract.py", workspace / "research_contract.py")
     atomic(workspace / "turn.json", {"run_id": "doctor", "attempt": 0, "search_mode": "live"})
     atomic(workspace / "AGENTS.md", b"This is a bounded runtime capability probe. No delegation. Use no MCP. Do not install anything or request escalation. Stay in this workspace.\n")
     props = {"shell_ok": {"type": "boolean"}, "write_ok": {"type": "boolean"},
@@ -111,11 +113,13 @@ def main(argv=None):
     r = sub.add_parser("run", help="Create a new isolated research run")
     r.add_argument("--problem", required=True, help="Markdown path relative to repository root")
     r.add_argument("--iterations", type=int, default=10)
+    r.add_argument("--iterative-improvement", action="store_true")
     r.add_argument("--dry-run", action="store_true", help="Print settings and command without creating a run")
     r = sub.add_parser("resume", help="Continue the recorded generator and pending verification")
     r.add_argument("--run-id", required=True)
     r.add_argument("--iterations", type=int, default=10)
     r.add_argument("--clear-pause", action="store_true")
+    r.add_argument("--iterative-improvement", action="store_true", help="Explicitly enable improvement research on an existing run")
     for name in ("status", "pause", "export"):
         r = sub.add_parser(name)
         r.add_argument("--run-id", required=True)
@@ -138,14 +142,17 @@ def main(argv=None):
                     raise WorkflowError("Problem must be an existing Markdown file")
                 cwd = workflow.root / "RUN_ID" / "generation"
                 print(json.dumps({"settings": settings(), "problem": str(problem),
+                                  "mode": "improvement" if args.iterative_improvement else "fixed",
                                   "command": command(settings(), cwd, "generator", "live", cwd / "final.txt"),
                                   "note": "Dry run only; no files or model calls."}, indent=2))
                 return 0
-            run_id = workflow.create(args.problem)
+            run_id = workflow.create(args.problem, iterative_improvement=args.iterative_improvement)
             print(json.dumps({"run_id": run_id, "path": str(workflow.path(run_id))}), flush=True)
-            result = workflow.resume(run_id, args.iterations)
+            with ElapsedTimer():
+                result = workflow.resume(run_id, args.iterations)
         elif args.command == "resume":
-            result = workflow.resume(args.run_id, args.iterations, args.clear_pause)
+            with ElapsedTimer():
+                result = workflow.resume(args.run_id, args.iterations, args.clear_pause, args.iterative_improvement)
         elif args.command == "status":
             _, result = workflow.load(args.run_id)
         elif args.command == "pause":

@@ -176,3 +176,9 @@ If any error or gap exists, `verdict` must be `"wrong"` and `repair_hints` must 
 3. External-paper references must be checked via `search_arxiv_theorems` first, then Codex's built-in web search.
 4. Accept iff there are zero errors and zero gaps.
 5. Persist final JSON to `results/{run_id}/verification.json`.
+
+## Runner-bound research context
+
+When the request explicitly names a research_context.json and a CLI output schema, read that context, candidate.md, and binding.json from the named run directory. The context's original_question is immutable. Fixed-mode proofs must retain its exact theorem statement. Improvement-mode proofs instead establish the exact proposed claim and must additionally establish a strict improvement over the original known results and every accepted result in the frozen baseline. Compare domains, hypotheses, quantifiers and formulas and justify a concrete gain; equivalent results are not improvements and unchecked comparisons are unresolved.
+
+For these requests use the provided extended final-response schema, including statement_sha256 and candidate_sha256 and, for improvement mode, improvement_assessment (baseline_sha256, verdict=strict_improvement|not_improvement|unresolved, explanation). The proof verdict remains independent. The CLI writes the structured final response; do not call write_verification_output with this extended payload, since its legacy schema differs. All substantive sequential checking, source verification, memory, and error/gap rules above still apply.

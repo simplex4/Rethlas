@@ -85,7 +85,71 @@ On this checkout with Codex CLI 0.153.2, Python 3.14.7, and the Edu login at `$H
 - The included finite-group example completed generation, a cooperative pause, resumed independent verification, acceptance, and an export whose hash matches the frozen candidate.
 - Native subgoal work was observed during generation. Maximum-depth recursive delegation was not separately exercised.
 - A separate live verifier rejected a deliberately invalid proof and published no verified file.
-- The theorem endpoint returned `403 Forbidden` through the network proxy, followed by the CLI's approval-request failure. The doctor therefore reports `core_passed: true`, `retrieval_passed: false`, and `passed: false`.
+- The initial theorem retrieval probe returned `403 Forbidden` followed by an approval-request failure. The user subsequently resolved this with `-c 'approvals_reviewer="auto_review"'`; this was not a ChatGPT Edu account restriction. Fresh and resumed sandbox commands include that setting. The initial doctor result remains historical evidence, not a current diagnosis.
 - Managed requirements permit cached built-in search but prohibit live built-in search. Source-dependent research can still be blocked; supplied references and self-contained reasoning remain usable.
 
 Local, ignored evidence is recorded in `.local/sandbox-workflow/acceptance/summary.json`, with the corresponding run and probe directories. These observations do not establish unrestricted network access or formal mathematical certification.
+
+## Fixed theorems and iterative improvement
+
+Fixed-statement mode remains the default: the final theorem must contain the original
+complete statement, with no added or removed hypotheses. Submission preflight reports
+format errors before verification; non-mathematical appendices after the theorem are allowed.
+
+For an open problem, enable iterative improvement explicitly:
+
+```sh
+CODEX_HOME="$HOME/.codex" python3 -m sandbox_workflow run \
+  --problem agents/generation/data/my_bound.md --iterative-improvement --iterations 10
+```
+
+The generator writes a precise new theorem and an `improvement.json` object containing
+`statement` and `improvement` (the comparison argument). The original question stays
+unchanged. Each fresh verifier receives the candidate and a frozen baseline containing
+the original question and every accepted result. Promotion requires a correct proof and
+an independent `strict_improvement` assessment, with matching hashes. Equivalent bounds,
+unresolved comparisons, and incorrect proofs are not promoted.
+
+After acceptance, the same generator session resumes to seek the next improvement.
+`--iterations` bounds additional generation turns; pause/resume works between turns.
+Exhausting the budget leaves status `incomplete`, even if useful results were accepted;
+it is not a claim of optimality. The CLI prints elapsed time every 30 seconds and total
+invocation time on exit to stderr, keeping stdout JSON-readable.
+
+`export` remains available while improvement research is incomplete or paused. It exports
+the latest accepted proof plus the full candidate archive to
+`.local/sandbox-workflow/exports/RUN_ID/CANDIDATE_INDEX/`. Every accepted round remains in
+the run's `candidates/`; the run-local `results/` points to the latest accepted round.
+A rejected later attempt never replaces an accepted result.
+
+An existing run can explicitly opt in with:
+
+```sh
+CODEX_HOME="$HOME/.codex" python3 -m sandbox_workflow resume \
+  --run-id RUN_ID --iterative-improvement --clear-pause --iterations 10
+```
+
+Finish any pending verification before switching modes. Ordinary `resume` preserves the
+recorded mode. This upgrade refreshes protocol helpers and instructions while preserving
+research, checkpoints, logs, candidates, and accepted results.
+
+## Iterative-improvement validation
+
+The feature's offline checks cover multiple accepted rounds, non-improvements, incorrect
+proofs, missing or stale comparisons, changed baselines, pause/resume, retained exports,
+fixed-statement enforcement, submission preflight, and timer cleanup. The original shell
+runner and MCP-to-HTTP verification path are exercised with simulated model responses.
+ChatGPT store tests also cover authorization and retry behavior.
+
+```sh
+python3 -m unittest discover -s sandbox_workflow/tests -q
+# Use existing environments with the appropriate project dependencies:
+python3 -m unittest discover -s chatgpt_workflow/tests -q
+python3 -m unittest discover -s agents/verification/tests -q
+```
+
+On 2026-09-23, 53 offline tests passed. No live mathematical improvement run was started.
+ChatGPT's MCP transport was not tested: the available agent environments contained MCP 2.x,
+while `chatgpt_workflow/requirements.txt` pins MCP 1.29.1, and the dedicated ChatGPT environment
+was absent. Its database and authorization tests ran with the existing verification Python.
+No dependencies were installed or changed.

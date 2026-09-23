@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 import math
 import re
+import os
+import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import requests
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from sandbox_workflow.legacy import context as research_context, save_receipt, promoted
 
 try:
     from fastmcp import FastMCP
@@ -207,6 +211,7 @@ def verify_proof_service(
     proof: str,
     endpoint: str = VERIFY_PROOF_URL,
     timeout_seconds: int = 3600,
+    improvement: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     if not statement.strip():
         raise ValueError("statement must be non-empty")
@@ -219,6 +224,16 @@ def verify_proof_service(
         "statement": statement,
         "proof": proof,
     }
+    policy_file = os.environ.get('RETHLAS_POLICY_FILE')
+    context = None
+    if policy_file:
+        policy = json.loads(Path(policy_file).read_text())
+        if statement != policy['original_question']:
+            raise ValueError('The original problem statement is immutable; pass its complete unchanged text')
+        context = research_context(policy, proof, improvement)
+        payload['research_context'] = context
+    elif improvement is not None:
+        raise ValueError('Improvement verification requires a runner-provided research policy')
 
     response = requests.post(endpoint, json=payload, timeout=timeout_seconds)
     response.raise_for_status()
@@ -230,6 +245,9 @@ def verify_proof_service(
 
     if not isinstance(body, dict):
         raise ValueError("verification service must return a JSON object")
+    if context is not None:
+        save_receipt(policy_file, proof, context, body)
+        return {**body, 'accepted': promoted(body, context), 'endpoint': endpoint}
 
     return {
         "statement": statement,
@@ -405,8 +423,9 @@ def build_mcp_app() -> Optional[Any]:
     def _tool_verify_proof_service(
         statement: str,
         proof: str,
+        improvement: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        return verify_proof_service(statement=statement, proof=proof)
+        return verify_proof_service(statement=statement, proof=proof, improvement=improvement)
 
     @app.tool(name="memory_init")
     def _tool_memory_init(

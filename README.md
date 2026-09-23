@@ -53,7 +53,7 @@ python -m pip install -r mcp/requirements.txt
 ./tests/run_example.sh
 ```
 
-The runner alternates search-disabled and search-enabled continuation turns, writes append-only iteration logs, and stops when `results/<problem_id>/blueprint_verified.md` exists. It supports dry-run validation, pausing, and automatic continuation from existing logs. See [the Codex workflow guide](docs/codex-workflow.md).
+The runner alternates search-disabled and search-enabled continuation turns, writes append-only iteration logs, and, by default, stops when `results/<problem_id>/blueprint_verified.md` exists. It supports dry-run validation, pausing, and automatic continuation from existing logs. See [the Codex workflow guide](docs/codex-workflow.md).
 
 ## Sandboxed Codex mode (managed Edu accounts)
 
@@ -128,3 +128,20 @@ The first run downloads the MATbook theme. Open `http://localhost:3264` after Zo
 ## License
 
 This distribution is licensed under Apache License 2.0. See `LICENSE` and `NOTICE`. Existing upstream files changed by this release carry a prominent modification notice.
+
+## Open questions and improving bounds
+
+All three modes offer opt-in iterative improvement. Fixed-theorem mode remains the default
+and preserves the original complete statement. In improvement mode, the generator states
+a precise new result and explains its gain; the verifier must confirm both the proof and
+a strict improvement over the original known results and all accepted rounds.
+
+- Sandboxed Codex: add `--iterative-improvement` to `run` (or explicitly upgrade with `resume`).
+- Original Codex: set `ITERATIVE_IMPROVEMENT=1` on the generation runner.
+- ChatGPT: add `--iterative-improvement` when importing or creating the problem; open the
+  next authorized generation run after each accepted review.
+
+Codex runners continue generation within their iteration budgets after acceptance. All
+accepted rounds are preserved. Pausing or exhausting a budget does not imply optimality.
+Sandboxed Codex now prints elapsed time every 30 seconds and total time on exit. See the
+mode-specific guides above for commands, result locations and recovery.

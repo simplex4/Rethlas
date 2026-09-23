@@ -95,15 +95,17 @@ def build_server(store: Store, port=8766):
     @app.tool(annotations=write)
     @access.protect
     def submit_candidate(problem_id: str, items: list[ProofItem],
-                         parent_candidate: str | None = None) -> dict[str, Any]:
+                         parent_candidate: str | None = None, improvement: dict[str, str] | None = None,
+                         baseline_sha256: str | None = None) -> dict[str, Any]:
         """Generation: submit a complete immutable proof for separate review (1–200 items, max 2 MB).
 
         Final item must have kind=theorem, item_id=main, and statement exactly equal to the
-        stored original. Every item has a nonblank proof (definitions may explain their meaning).
+        stored original in fixed mode, or improvement.statement in improvement mode.
+        For improvements supply the current baseline_sha256 and a precise improvement comparison. Every item has a nonblank proof (definitions may explain their meaning).
         Declare external results in citations with full statement, source and applicability.
-        First parent is null; after rejection use latest_candidate. No partial proofs.
+        First parent is null; after any previous candidate use latest_candidate. No partial proofs.
         """
-        return store.submit_candidate(problem_id, [i.model_dump() for i in items], parent_candidate)
+        return store.submit_candidate(problem_id, [i.model_dump() for i in items], parent_candidate, improvement, baseline_sha256)
 
     @app.tool(annotations=read)
     @access.protect
@@ -158,23 +160,23 @@ def build_server(store: Store, port=8766):
     @app.tool(annotations=write)
     @access.protect
     def submit_review(verification_id: str, candidate_sha256: str, summary: str,
-                       repair_hints: str = "") -> dict[str, Any]:
+                       repair_hints: str = "", improvement_assessment: dict[str, str] | None = None) -> dict[str, Any]:
         """Complete review after every item is checked. Server derives verdict from persisted findings.
 
         Any error, gap, wrong or unresolved citation yields wrong and requires nonblank repair_hints.
         Otherwise hints must be empty. Accepted candidates can be exported in this same turn.
         """
-        return store.submit_review(verification_id, candidate_sha256, summary, repair_hints)
+        return store.submit_review(verification_id, candidate_sha256, summary, repair_hints, improvement_assessment)
 
     @app.tool(annotations=write)
     @access.protect
-    def export_accepted(problem_id: str) -> dict[str, Any]:
+    def export_accepted(problem_id: str, candidate_id: str | None = None) -> dict[str, Any]:
         """Write the exact accepted proof, review and binding manifest to Rethlas results.
 
         Creates blueprint_verified.md compatible with the legacy renderer. Refuses to overwrite
         different existing outputs. This is local export, not website deployment or formal certification.
         """
-        return store.export_accepted(problem_id)
+        return store.export_accepted(problem_id, candidate_id)
 
     @app.tool(annotations=read)
     @access.protect
@@ -257,6 +259,7 @@ def main():
     parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--import-problem", metavar="PROBLEM_ID")
+    parser.add_argument("--iterative-improvement", action="store_true", help="Choose improvement research when creating/importing a new problem")
     parser.add_argument("--status", metavar="PROBLEM_ID")
     parser.add_argument("--export", metavar="PROBLEM_ID")
     parser.add_argument("--issue-key", metavar="PROBLEM_ID")
@@ -276,6 +279,8 @@ def main():
     parser.add_argument("--file-id")
     parser.add_argument("--provenance", default="Local user import")
     args = parser.parse_args()
+    if args.iterative_improvement and not (args.import_problem or args.create_problem):
+        parser.error('--iterative-improvement requires --import-problem or --create-problem')
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
     if sum(bool(x) for x in (args.import_problem, args.status, args.export, args.issue_key,
@@ -328,9 +333,9 @@ def main():
         path = inside(ROOT, args.statement_file)
         if path.stat().st_size > 200_000:
             parser.error("Statement file exceeds 200 KB")
-        result = store.create_problem(args.create_problem, path.read_text(encoding="utf-8"), source=str(path.relative_to(ROOT)))
+        result = store.create_problem(args.create_problem, path.read_text(encoding="utf-8"), source=str(path.relative_to(ROOT)), iterative_improvement=args.iterative_improvement)
     elif args.import_problem:
-        result = store.import_problem(args.import_problem)
+        result = store.import_problem(args.import_problem, args.iterative_improvement)
     elif args.status:
         result = store.context(args.status)
     elif args.export:

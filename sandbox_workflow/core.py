@@ -15,6 +15,9 @@ import sys
 import tempfile
 import tomllib
 import uuid
+from .research_contract import (digest, validate_candidate, validate_claim, comparison_schema,
+                               validate_comparison, IMPROVEMENT_INSTRUCTIONS,
+                               VERIFIER_IMPROVEMENT_INSTRUCTIONS)
 
 PACKAGE = Path(__file__).resolve().parent
 REPO = PACKAGE.parent
@@ -90,6 +93,7 @@ def settings():
         "verifier_model": os.environ.get("CODEX_MODEL", "gpt-6-astra"),
         "verifier_effort": os.environ.get("CODEX_REASONING_EFFORT", "max"),
         "sandbox": "workspace-write", "approval_policy": "on-request",
+        "approvals_reviewer": "auto_review",
         "web_search_mode": "cached",
     }
 
@@ -190,7 +194,7 @@ def parse_events(path):
     return result
 
 
-def verification_schema():
+def verification_schema(improvement=False):
     finding = {"type": "object", "additionalProperties": False,
                "properties": {"location": {"type": "string"}, "issue": {"type": "string"}},
                "required": ["location", "issue"]}
@@ -202,11 +206,14 @@ def verification_schema():
     props = {"statement_sha256": {"type": "string"}, "candidate_sha256": {"type": "string"},
              "verification_report": report, "verdict": {"type": "string", "enum": ["correct", "wrong"]},
              "repair_hints": {"type": "string"}}
+    if improvement:
+        props["improvement_assessment"] = comparison_schema()
     return {"type": "object", "additionalProperties": False, "properties": props, "required": list(props)}
 
 
 def validate_review(value, binding):
-    if not isinstance(value, dict) or set(value) != set(verification_schema()["properties"]):
+    improvement = binding.get("mode") == "improvement"
+    if not isinstance(value, dict) or set(value) != set(verification_schema(improvement)["properties"]):
         raise WorkflowError("Verifier output has missing or unexpected fields")
     for key in ("candidate_sha256", "statement_sha256"):
         if value[key] != binding[key]:
@@ -230,6 +237,8 @@ def validate_review(value, binding):
     hints = value["repair_hints"]
     if not isinstance(hints, str) or (correct and hints != "") or (not correct and not hints.strip()):
         raise WorkflowError("Repair hints contradict verdict")
+    if improvement:
+        validate_comparison(value["improvement_assessment"], binding["baseline_sha256"])
     return value
 
 
@@ -260,11 +269,12 @@ class Workflow:
         shutil.copy2(run / "inputs" / "statement.md", destination / "statement.md")
         shutil.copytree(run / "inputs" / "references", destination / "references")
         shutil.copy2(PACKAGE / "research.py", destination / "research.py")
+        shutil.copy2(PACKAGE / "research_contract.py", destination / "research_contract.py")
         shutil.copy2(PACKAGE / "templates" / f"{role}.md", destination / "AGENTS.md")
         shutil.copy2(PACKAGE / "templates" / "subgoal.md", destination / "subgoal.md")
         shutil.copytree(PACKAGE / "templates" / "skills", destination / "skills")
 
-    def create(self, problem, config=None):
+    def create(self, problem, config=None, iterative_improvement=False):
         problem = inside(self.repo, problem)
         if not problem.is_file() or problem.suffix != ".md":
             raise WorkflowError("Problem must be an existing Markdown file inside the repository")
@@ -294,6 +304,7 @@ class Workflow:
                     "settings": config or settings(), "status": "ready", "phase": "generation",
                     "next_iteration": 0, "generator_session": None, "attempts": [],
                     "candidates": [], "pending_candidate": None, "error": None}
+        manifest.update(mode_policy="improvement" if iterative_improvement else "fixed", accepted_candidates=[])
         self.prepare_workspace(run, run / "generation", "generation")
         child = (PACKAGE / "templates" / "subgoal.md").read_text()
         cfg = manifest["settings"]
@@ -324,7 +335,8 @@ class Workflow:
         log.mkdir(parents=True, exist_ok=False)
         output = log / "final.txt"
         turn = {"run_id": manifest["run_id"], "role": role, "attempt": index,
-                "iteration": manifest["next_iteration"], "search_mode": search_mode}
+                "iteration": manifest["next_iteration"], "search_mode": search_mode,
+                "mode": manifest.get("mode_policy", "fixed")}
         atomic(workspace / "turn.json", turn)
         session = manifest["generator_session"] if role == "generator" else None
         cmd = command(manifest["settings"], workspace, role, search_mode, output, schema, session)
@@ -394,12 +406,12 @@ class Workflow:
             raise WorkflowError("Candidate changed after submission or is empty")
         statement = (run / "inputs" / "statement.md").read_text()
         proof = data.decode("utf-8")
-        items = list(re.finditer(r"(?m)^# (.+)$", proof))
-        last = proof[items[-1].end():] if items else ""
-        sections = re.search(r"(?ms)^## statement\s*\n(.*?)^## proof\s*\n(.+)", last)
-        if (not items or not items[-1].group(1).lower().startswith("theorem") or not sections
-                or sections.group(1).strip() != statement.strip() or not sections.group(2).strip()):
-            raise WorkflowError("Final theorem must contain the original complete statement and a nonempty proof")
+        mode = manifest.get("mode_policy", "fixed")
+        claim = request.get("claim")
+        validate_candidate(proof, statement, mode, claim)
+        baseline = self.baseline(run, manifest)
+        if mode == "improvement" and request.get("baseline_sha256") != digest(baseline):
+            raise WorkflowError("Submission refers to a stale accepted-results baseline")
         candidate_hash = sha(data)
         if any(c["candidate_sha256"] == candidate_hash for c in manifest["candidates"]):
             raise WorkflowError("Candidate repeats an already submitted proof; revise it before resubmission")
@@ -409,6 +421,9 @@ class Workflow:
         dest.mkdir(parents=True, exist_ok=True)
         atomic(dest / "candidate.md", data)
         binding = {"statement_sha256": manifest["statement_sha256"], "candidate_sha256": candidate_hash}
+        if mode == "improvement":
+            binding.update(mode=mode, claim=claim, baseline_sha256=digest(baseline))
+            atomic(dest / "baseline.json", baseline)
         atomic(dest / "binding.json", binding)
         # Freeze cited/downloaded sources and reproducible computational evidence,
         # but do not expose private generator conversation or research memory.
@@ -430,6 +445,30 @@ class Workflow:
         manifest["phase"] = "verification"
         manifest["attempts"][-1]["status"] = "consumed"
         self.save(run, manifest)
+
+    def baseline(self, run, manifest):
+        accepted = manifest.get("accepted_candidates", [])
+        if not accepted and manifest["phase"] == "accepted":
+            accepted = [manifest["pending_candidate"]]
+        results = []
+        for i in accepted:
+            candidate = manifest["candidates"][i]
+            frozen = inside(run, candidate["directory"])
+            data = (frozen / "candidate.md").read_bytes()
+            if sha(data) != candidate["candidate_sha256"]:
+                raise WorkflowError("Accepted baseline proof changed")
+            self.check_evidence(frozen, candidate)
+            review = read_json(frozen / "verification.json")
+            validate_review(review, candidate)
+            if review["verdict"] != "correct":
+                raise WorkflowError("Baseline proof lacks a correct review")
+            if candidate.get("mode") == "improvement":
+                if digest(read_json(frozen / "baseline.json")) != candidate["baseline_sha256"] or not validate_comparison(review["improvement_assessment"], candidate["baseline_sha256"]):
+                    raise WorkflowError("Accepted baseline comparison changed")
+            results.append({"candidate_id": i, "candidate_sha256": candidate["candidate_sha256"],
+                            "claim": candidate.get("claim"), "proof": data.decode()})
+        return {"original_question": (run / "inputs" / "statement.md").read_text(),
+                "accepted_results": results}
 
     @staticmethod
     def check_turn_artifact(manifest, meta):
@@ -453,13 +492,22 @@ class Workflow:
                 shutil.copytree(frozen / name, workspace / name, dirs_exist_ok=True)
         atomic(workspace / "candidate.md", data)
         binding = {key: candidate[key] for key in ("statement_sha256", "candidate_sha256")}
+        improving = candidate.get("mode") == "improvement"
+        if improving:
+            binding.update({key: candidate[key] for key in ("mode", "claim", "baseline_sha256")})
+            baseline = read_json(frozen / "baseline.json")
+            if digest(baseline) != candidate["baseline_sha256"]:
+                raise WorkflowError("Frozen improvement baseline changed")
+            atomic(workspace / "baseline.json", baseline)
         atomic(workspace / "binding.json", binding)
         schema = workspace / "output.schema.json"
-        atomic(schema, verification_schema())
+        atomic(schema, verification_schema(improving))
         prompt = ("Follow AGENTS.md and read the verification skills. Independently verify the entire "
                   "candidate.md against statement.md and references/. Read binding.json and return the "
                   "required structured verification report with those exact hashes. Do not read the "
                   "generator's conversation or other workspaces. Unresolved necessary checks are gaps.")
+        if improving:
+            prompt += "\n" + VERIFIER_IMPROVEMENT_INSTRUCTIONS + " Read baseline.json and binding.json."
         log = self.attempt(run, manifest, "verifier", workspace, "live", prompt, schema)
         self.collect_review(run, manifest, log)
 
@@ -473,17 +521,25 @@ class Workflow:
         self.check_evidence(frozen, candidate)
         workspace = inside(run, manifest["attempts"][-1]["workspace"])
         self.check_workspace_inputs(workspace, manifest)
-        for name, digest in candidate["evidence_hashes"].items():
+        for name, expected_digest in candidate["evidence_hashes"].items():
             path = inside(workspace, name)
-            if not path.is_file() or sha(path.read_bytes()) != digest:
+            if not path.is_file() or sha(path.read_bytes()) != expected_digest:
                 raise WorkflowError(f"Verifier's candidate evidence changed: {name}")
         if (workspace / "candidate.md").read_bytes() != data:
             raise WorkflowError("Verifier's input candidate changed during review")
         if sha((workspace / "statement.md").read_bytes()) != manifest["statement_sha256"]:
             raise WorkflowError("Verifier's input statement changed during review")
         report = validate_review(read_json(log / "final.txt"), candidate)
+        improving = candidate.get("mode") == "improvement"
+        strict_gain = True
+        if improving:
+            if digest(read_json(frozen / "baseline.json")) != candidate["baseline_sha256"] or digest(read_json(workspace / "baseline.json")) != candidate["baseline_sha256"]:
+                raise WorkflowError("Improvement baseline changed during review")
+            strict_gain = validate_comparison(report["improvement_assessment"], candidate["baseline_sha256"])
         atomic(frozen / "verification.json", report)
-        candidate["status"] = "accepted" if report["verdict"] == "correct" else "rejected"
+        atomic(run / "generation" / "review.json", report)
+        atomic(run / "generation" / "reviewed_candidate.md", data)
+        candidate["status"] = ("accepted" if strict_gain else "not_improved") if report["verdict"] == "correct" else "rejected"
         candidate["review_log"] = str(log.relative_to(run))
         if candidate["status"] == "accepted":
             # Never use an agent-created filename as evidence of verification.
@@ -491,16 +547,19 @@ class Workflow:
             atomic(run / "results" / "verification.json", report)
             manifest["phase"] = "accepted"
             manifest["status"] = "accepted"
+            manifest.setdefault("accepted_candidates", []).append(manifest["pending_candidate"])
+            if improving:
+                manifest["phase"] = "generation"
+                manifest["status"] = "incomplete"
+                manifest["pending_candidate"] = None
         else:
-            atomic(run / "generation" / "review.json", report)
-            atomic(run / "generation" / "reviewed_candidate.md", data)
             manifest["phase"] = "generation"
             manifest["status"] = "incomplete"
             manifest["pending_candidate"] = None
         manifest["attempts"][-1]["status"] = "consumed"
         self.save(run, manifest)
 
-    def resume(self, run_id, iterations=10, clear_pause=False):
+    def resume(self, run_id, iterations=10, clear_pause=False, iterative_improvement=False):
         if iterations <= 0:
             raise WorkflowError("Iterations must be positive")
         run = self.path(run_id)
@@ -509,6 +568,21 @@ class Workflow:
             if manifest["settings"]["codex_home"] != codex_home():
                 raise WorkflowError("CODEX_HOME differs from the account home recorded for this run")
             self.check_inputs(run, manifest)
+            if iterative_improvement and manifest.get("mode_policy", "fixed") != "improvement":
+                if manifest["phase"] == "verification":
+                    raise WorkflowError("Finish pending verification before changing research policy")
+                if manifest["phase"] == "accepted":
+                    self.check_accepted(run, manifest)
+                    manifest.setdefault("accepted_candidates", [manifest["pending_candidate"]])
+                    manifest["phase"] = "generation"
+                    manifest["pending_candidate"] = None
+                manifest["mode_policy"] = "improvement"
+                self.save(run, manifest)
+            # Refresh protocol helpers/instructions on explicit resume; retain all research artifacts.
+            for name in ("research.py", "research_contract.py"):
+                shutil.copy2(PACKAGE / name, run / "generation" / name)
+            shutil.copy2(PACKAGE / "templates/generation.md", run / "generation/AGENTS.md")
+            shutil.copytree(PACKAGE / "templates/skills", run / "generation/skills", dirs_exist_ok=True)
             if clear_pause:
                 (run / "PAUSE_AFTER_TURN").unlink(missing_ok=True)
             if manifest["phase"] == "accepted":
@@ -544,6 +618,7 @@ class Workflow:
                         manifest["error"] = str(exc)
                         self.save(run, manifest)
                         raise WorkflowError(f"Recovered turn has invalid output: {exc}") from exc
+            previous_error = manifest.get("error")
             manifest["error"] = None
             remaining = iterations
             try:
@@ -558,6 +633,7 @@ class Workflow:
                         manifest["status"] = "incomplete"
                         break
                     workspace = run / "generation"
+                    atomic(workspace / "baseline.json", self.baseline(run, manifest))
                     # A stale submission from a prior turn must never count as a new candidate.
                     (workspace / "submission.json").unlink(missing_ok=True)
                     index = manifest["next_iteration"]
@@ -566,9 +642,14 @@ class Workflow:
                               "supplied references, turn.json, checkpoint.md if present, and review.json if present. "
                               "Continue substantive research from durable memory and address every review finding. "
                               f"This turn's external search mode is {mode}. "
-                              "Use research.py for memory and checkpoints. Submit only a complete proof of the "
-                              "original problem with `python3 research.py submit --file blueprint.md`; otherwise "
+                              "Use research.py for memory and checkpoints. Submit only a complete candidate meeting "
+                              "the recorded research policy with `python3 research.py submit --file blueprint.md`; otherwise "
                               "save a durable checkpoint. Do not invoke Codex or verify your own candidate.")
+                    if manifest.get("mode_policy") == "improvement":
+                        prompt += "\n" + IMPROVEMENT_INSTRUCTIONS + " Read baseline.json. Submit with --improvement-file improvement.json."
+                    if previous_error:
+                        prompt += "\nPrevious submission validation error: " + previous_error
+                        previous_error = None
                     self.attempt(run, manifest, "generator", workspace, mode, prompt)
                     self.check_inputs(run, manifest)
                     self.collect_candidate(run, manifest)
@@ -586,15 +667,22 @@ class Workflow:
 
     def check_accepted(self, run, manifest):
         self.check_inputs(run, manifest)
-        if manifest["phase"] != "accepted":
+        accepted = manifest.get("accepted_candidates", [])
+        if not accepted and manifest["phase"] == "accepted":
+            accepted = [manifest["pending_candidate"]]
+        if not accepted:
             raise WorkflowError("Run has no accepted proof")
-        candidate = manifest["candidates"][manifest["pending_candidate"]]
+        self.baseline(run, manifest)
+        candidate = manifest["candidates"][accepted[-1]]
         frozen = inside(run, candidate["directory"])
         data = (frozen / "candidate.md").read_bytes()
         if sha(data) != candidate["candidate_sha256"]:
             raise WorkflowError("Accepted candidate was changed")
         self.check_evidence(frozen, candidate)
         validate_review(read_json(frozen / "verification.json"), candidate)
+        if candidate.get("mode") == "improvement":
+            if not validate_comparison(read_json(frozen / "verification.json")["improvement_assessment"], candidate["baseline_sha256"]):
+                raise WorkflowError("Candidate was not verified to improve the baseline")
         if read_json(frozen / "verification.json")["verdict"] != "correct":
             raise WorkflowError("Accepted candidate has no correct review")
         if (run / "results" / "blueprint_verified.md").read_bytes() != data:
@@ -614,7 +702,8 @@ class Workflow:
         with lock(run / "coordinator.lock"):
             run, manifest = self.load(run_id)
             frozen = self.check_accepted(run, manifest)
-            target = inside(self.repo, output or f".local/sandbox-workflow/exports/{run_id}")
+            suffix = f"/{frozen.name}" if manifest.get("mode_policy") == "improvement" else ""
+            target = inside(self.repo, output or f".local/sandbox-workflow/exports/{run_id}{suffix}")
             if target.exists() or target.is_relative_to(run):
                 raise WorkflowError("Export destination already exists or is inside the run")
             target.parent.mkdir(parents=True, exist_ok=True)

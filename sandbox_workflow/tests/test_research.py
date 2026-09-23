@@ -16,6 +16,7 @@ class ResearchTests(unittest.TestCase):
         self.old = Path.cwd()
         self.tmp = tempfile.TemporaryDirectory()
         os.chdir(self.tmp.name)
+        Path("statement.md").write_text("Original theorem.")
 
     def tearDown(self):
         os.chdir(self.old)
@@ -38,7 +39,7 @@ class ResearchTests(unittest.TestCase):
         result = self.call("search", "--query", "compact cover")[1]
         self.assertEqual(result["matches"][0]["record"]["entry"]["claim"], "compact finite cover")
         self.assertEqual(self.call("branch", "--id", "b1", "--file", "entry.json")[0], 0)
-        Path("proof.md").write_text("A complete candidate.")
+        Path("proof.md").write_text("# theorem main\n## statement\nOriginal theorem.\n## proof\nA complete candidate.")
         self.assertEqual(self.call("checkpoint", "--file", "proof.md")[0], 0)
         self.assertEqual(Path("checkpoint.md").read_bytes(), Path("proof.md").read_bytes())
         self.assertEqual(self.call("submit", "--file", "proof.md")[0], 0)
@@ -49,7 +50,7 @@ class ResearchTests(unittest.TestCase):
         self.assertFalse(Path("blueprint_verified.md").exists())
 
     def test_outputs_require_current_turn_identity(self):
-        Path("proof.md").write_text("candidate")
+        Path("proof.md").write_text("# theorem main\n## statement\nOriginal theorem.\n## proof\ncandidate")
         for turn in (None, "{}", '{"run_id":"test","attempt":true}', '{"run_id":"test","attempt":-1}'):
             if turn is not None:
                 Path("turn.json").write_text(turn)
@@ -62,6 +63,19 @@ class ResearchTests(unittest.TestCase):
             code, result = self.call(command, "--file", "proof.md")
             self.assertEqual(code, 0)
             self.assertEqual(result["attempt"], 0)
+
+    def test_improvement_submit_preflight_and_binding(self):
+        Path("turn.json").write_text(json.dumps({"run_id":"test", "attempt":1, "mode":"improvement"}))
+        Path("baseline.json").write_text('{"accepted_results":[]}')
+        Path("claim.json").write_text('{"statement":"Bound >= 2.","improvement":"Strict gain."}')
+        Path("proof.md").write_text("# theorem main\n## statement\nBound >= 3.\n## proof\nArgument.")
+        self.assertEqual(self.call("submit","--file","proof.md","--improvement-file","claim.json")[0],1)
+        self.assertFalse(Path("submission.json").exists())
+        Path("proof.md").write_text("# theorem main\n## statement\nBound >= 2.\n## proof\nArgument.")
+        code, submitted = self.call("submit","--file","proof.md","--improvement-file","claim.json")
+        self.assertEqual(code,0)
+        from sandbox_workflow.research_contract import digest
+        self.assertEqual(submitted["baseline_sha256"],digest({"accepted_results":[]}))
 
     def test_theorem_request_and_response_validation(self):
         with patch.object(research, "retrieve") as retrieve:

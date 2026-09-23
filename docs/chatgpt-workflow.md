@@ -117,3 +117,35 @@ sh chatgpt_workflow/run.sh --export example
 ```
 
 See [run authorization and research storage](chatgpt-runs.md) for cancellation, alternating search policy, files, papers, and readable research exports.
+
+## Iterative improvement
+
+Import or create an open problem with the option enabled:
+
+```sh
+sh chatgpt_workflow/run.sh --import-problem my_bound --iterative-improvement
+# Or: --create-problem my_bound --statement-file path/to/question.md --iterative-improvement
+```
+
+Fixed-statement mode remains the default. The problem's mode and original snapshot are
+immutable; use a new ID to change either. Existing databases gain the additional research
+metadata tables automatically, and old problems remain fixed-mode.
+
+In improvement mode, `get_problem_context` supplies the baseline and its hash. The final
+main statement must equal `improvement.statement`; the generator additionally submits an
+explicit `improvement.improvement` comparison and `baseline_sha256`. The verifier checks
+every proof item as before and must also supply `improvement_assessment`, containing the
+baseline hash, a verdict (`strict_improvement`, `not_improvement`, or `unresolved`), and
+an explanation addressing domains, hypotheses, and strict gain. Only correct proofs with
+strict improvement are promoted.
+
+Acceptance sets state `IMPROVING` rather than terminal `ACCEPTED`. After the verifier
+finishes its authorized run, open another generation run to seek the next improvement;
+continue alternating the existing two conversations and run authorizations. The server
+does not automatically launch ChatGPT conversations. The next candidate's parent is always
+`latest_candidate`, even after an acceptance.
+
+Accepted rounds remain exportable after later rejections or while another candidate is
+pending. Exports use `results/<problem_id>/improvements/<candidate_id>/`. The `export_accepted`
+tool accepts an optional accepted `candidate_id`; the CLI `--export` selects the latest
+accepted result. Exhausted research is not a proof of optimality.

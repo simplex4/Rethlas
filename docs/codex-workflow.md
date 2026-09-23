@@ -94,3 +94,32 @@ Set `PAUSE_FILE` to use a different marker. A marker already present at startup 
 After the initial turn, odd-numbered iterations disable web and arXiv search; even-numbered iterations allow search. Resumed runs retain this iteration-number schedule. The runner exits successfully when `blueprint_verified.md` exists, or when a requested pause is observed. Exhausting the added iteration budget without a verified proof exits nonzero.
 
 The wrapper invokes Codex with approval and sandbox bypass. Run it only in a checkout and environment you trust, and review the agent instructions and MCP configuration first.
+
+## Iterative improvement
+
+The default remains a fixed theorem: the complete original statement is immutable.
+For an open question, set `ITERATIVE_IMPROVEMENT=1` on both the initial invocation and
+later continuations, using the same runner options and account as usual:
+
+```sh
+ITERATIVE_IMPROVEMENT=1 PROBLEM_FILE=data/my_bound.md MAX_ITERATIONS=10 \
+  bash agents/generation/tests/run_example.sh
+```
+
+The runner snapshots the original question and mode in
+`results/<problem_id>/.research/policy.json`. The generator proposes a precise new theorem
+and an explicit comparison. The independent HTTP verifier checks both proof correctness
+and strict improvement over the original known results and all accepted rounds. The MCP
+service stores a bound review receipt. Only a proof matching an accepting receipt can be
+archived as verified.
+
+After each accepted round, the runner archives the proof, comparison context, and review
+under `results/<problem_id>/improvements/<proof_sha256>/`, removes the transient completion
+marker, and resumes generation. Rejections preserve earlier results. The existing iteration
+budget, append-only logs, elapsed timer and pause marker still apply. Budget exhaustion is
+reported as incomplete (exit 1), not as optimality or absence of progress.
+
+The HTTP verification service must be restarted to load the new protocol before new runs.
+Dry-run output includes the improvement setting. Existing policies cannot silently change
+mode or question: use a new problem ID for such a change. Old verified files without a bound
+review receipt are preserved and cannot automatically be imported as verified improvements.

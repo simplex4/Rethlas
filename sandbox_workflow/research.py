@@ -17,6 +17,10 @@ import sys
 import tempfile
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+try:
+    from .research_contract import validate_candidate, digest as baseline_digest
+except ImportError:  # copied standalone into the agent workspace
+    from research_contract import validate_candidate, digest as baseline_digest
 
 ENDPOINT = "https://leansearch.net/thm/search"
 MAX_DOWNLOAD = 32 * 1024 * 1024
@@ -155,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
             cmd.add_argument("--channel", required=True)
         if name == "branch":
             cmd.add_argument("--id", required=True)
+        if name == "submit":
+            cmd.add_argument("--improvement-file")
     cmd = commands.add_parser("search")
     cmd.add_argument("--query", required=True)
     cmd.add_argument("--channel")
@@ -204,7 +210,12 @@ def execute(args: argparse.Namespace) -> dict:
         data = path.read_bytes()
         if not data.strip():
             raise ValueError("candidate must not be empty")
+        turn = object_file("turn.json")
+        claim = object_file(args.improvement_file) if getattr(args, "improvement_file", None) else None
+        validate_candidate(data.decode('utf-8'), local('statement.md').read_text(), turn.get('mode', 'fixed'), claim)
         result = {"path": str(path.relative_to(Path.cwd().resolve())), "sha256": hashlib.sha256(data).hexdigest(), **identity}
+        if turn.get('mode') == 'improvement':
+            result.update(claim=claim, baseline_sha256=baseline_digest(object_file('baseline.json')))
         atomic("submission.json", json.dumps(result).encode())
         return result
     if args.command == "theorem-search":

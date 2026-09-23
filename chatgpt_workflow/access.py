@@ -80,7 +80,7 @@ class Access:
                 allowed = operation in READ_TOOLS | ROLE_TOOLS[role]
                 if "problem_id" in arguments:
                     allowed = allowed and arguments["problem_id"] == pid
-                if "candidate_id" in arguments:
+                if "candidate_id" in arguments and not (operation == "export_accepted" and arguments["candidate_id"] is None):
                     row = db.execute("SELECT problem_id FROM candidates WHERE candidate_id=?",
                                      (arguments["candidate_id"],)).fetchone()
                     allowed = allowed and bool(row) and row[0] == pid

@@ -67,3 +67,7 @@ If verification fails, revise `blueprint.md` directly and append to `failed_path
 ## Failure Logging
 
 Always persist verification output, including successful checks.
+
+## Runner-bound research protocol
+
+If RETHLAS_POLICY_FILE is present, read it. The statement argument must exactly match original_question in both modes. Fixed mode must keep the final theorem statement unchanged. In improvement mode, read every accepted_result, write the exact new theorem and comparison argument as {"statement":"...", "improvement":"..."}, and pass this object in the improvement argument. Require the returned accepted field to be true before renaming the draft. A correct proof with not_improvement or unresolved assessment is not an accepted improvement. Keep every returned field, including hashes and improvement_assessment, in memory. Do not compute or fabricate your own acceptance. Non-mathematical appendices are allowed after the final theorem.

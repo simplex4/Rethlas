@@ -76,8 +76,9 @@ arguments belong in memory. Supply ordered items, with prerequisites before uses
 
     {"item_id":"lemma-1", "kind":"lemma", "statement":"...", "proof":"...", "citations":[]}
 
-The last item must be kind="theorem", item_id="main". Its statement must be the EXACT
-original stored text, including whitespace/newlines. For definitions, explain the definition
+The last item must be kind="theorem", item_id="main". In fixed mode its statement must be the EXACT
+original stored text, including whitespace/newlines. In improvement mode use the precise
+new claim and the comparison contract below. For definitions, explain the definition
 and any existence or well-definedness obligations in proof. For other items give detailed
 arguments. Declare every external result used by an item in that item's citations:
 
@@ -148,3 +149,8 @@ active for recovery; tell the user the exact failure and provide a downloadable 
 Never equate a sandbox-local file with server persistence. If write tools appear missing,
 report that client limitation accurately; do not claim the server never supports writes.
 After finish_run, stop. Additional work needs a new local user-authorized run.
+
+## Iterative-improvement problems
+
+Read get_problem_context.mode. Fixed problems keep the original exact-statement rule. For mode=improvement, the original question is immutable context; the final main theorem instead states the precise proposed improvement. Read the original question and every accepted candidate listed in baseline via read_candidate, following all pages. Earlier accepted results remain available while research continues. An improvement may apply on a new domain, but must make a strict gain relative to the original known results and the whole accepted collection without weakening required hypotheses.
+Supply submit_candidate with improvement={"statement":"the precise theorem, exactly matching main.statement", "improvement":"comparison argument showing the exact domain and strict gain"}, and baseline_sha256 from the current context. Keep parent_candidate=latest_candidate even after acceptance. Fixed-mode submissions must omit those extra fields. Format or stale-baseline errors must be repaired before submitting. State IMPROVING means the last result was accepted and a further improvement is wanted; do not claim the question is exhausted. Save a checkpoint and finish_run at the authorized turn boundary. Another generation or verification conversation still needs a newly opened user-authorized run. Do not launch chats or open runs yourself.

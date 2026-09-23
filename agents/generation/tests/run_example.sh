@@ -10,6 +10,11 @@ MODEL="${MODEL:-gpt-6-astra}"
 REASONING_EFFORT="${REASONING_EFFORT:-max}"
 MAX_ITERATIONS="${MAX_ITERATIONS:-10}"
 DRY_RUN="${DRY_RUN:-0}"
+ITERATIVE_IMPROVEMENT="${ITERATIVE_IMPROVEMENT:-0}"
+if [[ "$ITERATIVE_IMPROVEMENT" != 0 && "$ITERATIVE_IMPROVEMENT" != 1 ]]; then
+  echo "ITERATIVE_IMPROVEMENT must be 0 or 1" >&2
+  exit 1
+fi
 
 if [[ "$PROBLEM_FILE" = /* ]]; then
   echo "PROBLEM_FILE must be relative to agents/generation: $PROBLEM_FILE" >&2
@@ -90,7 +95,7 @@ LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/$problem_rel/iter}"
 verified_path="$ROOT_DIR/results/$problem_rel/blueprint_verified.md"
 pause_path="${PAUSE_FILE:-$ROOT_DIR/results/$problem_rel/PAUSE_AFTER_ITERATION}"
 
-if [[ -f "$verified_path" ]]; then
+if [[ -f "$verified_path" && "$ITERATIVE_IMPROVEMENT" -eq 0 ]]; then
   echo "Already solved: $verified_path"
   exit 0
 fi
@@ -155,6 +160,7 @@ echo " Problem:    $PROBLEM_FILE"
 echo " Problem ID: $problem_rel"
 echo " References: $ref_dir"
 echo " Max iters:  $MAX_ITERATIONS"
+echo " Improve:    $ITERATIVE_IMPROVEMENT"
 if [[ "$found_log" -eq 1 ]]; then
   echo " Mode:       resume"
   echo " Session:    $session_id"
@@ -172,6 +178,21 @@ echo ""
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Dry run only; no verification request or Codex run was started."
   exit 0
+fi
+
+export RETHLAS_POLICY_FILE="$ROOT_DIR/results/$problem_rel/.research/policy.json"
+research_mode="fixed"
+if [[ "$ITERATIVE_IMPROVEMENT" -eq 1 ]]; then research_mode="improvement"; fi
+policy_command() {
+  PYTHONPATH="$ROOT_DIR/../..${PYTHONPATH:+:$PYTHONPATH}" python3 -m sandbox_workflow.legacy "$@"
+}
+policy_command prepare --policy "$RETHLAS_POLICY_FILE" --statement "$ROOT_DIR/$PROBLEM_FILE" --mode "$research_mode" >/dev/null
+if [[ -f "$verified_path" ]]; then
+  policy_command collect --policy "$RETHLAS_POLICY_FILE" --verified "$verified_path"
+fi
+research_prompt="Read results/$problem_rel/.research/policy.json. It contains the immutable original question, mode=$research_mode, and all accepted results."
+if [[ "$ITERATIVE_IMPROVEMENT" -eq 1 ]]; then
+  research_prompt+=" Seek a strict improvement over the original known bounds and the whole accepted collection. Write a precise theorem and improvement.json with statement and improvement fields. Pass this object as improvement to verify_proof_service, keeping statement equal to the original question. Publish blueprint_verified.md only when accepted is true, then end this turn; the runner archives it and resumes research."
 fi
 
 prepare_references
@@ -232,7 +253,7 @@ for ((iter = next_iter; iter < end_iter; iter += 1)); do
   echo "Starting iter=$iter -> $log_file"
 
   if [[ "$started_fresh" -eq 1 && "$iter" -eq 0 ]]; then
-    prompt="Use AGENTS.md exactly to solve the math problem in ${PROBLEM_FILE}. Use problem_id=${problem_rel}. ${ref_prompt}"
+    prompt="Use AGENTS.md exactly to solve the math problem in ${PROBLEM_FILE}. Use problem_id=${problem_rel}. ${ref_prompt} ${research_prompt}"
 
     if (
       cd "$ROOT_DIR"
@@ -240,6 +261,7 @@ for ((iter = next_iter; iter < end_iter; iter += 1)); do
         -C "$ROOT_DIR" \
         -m "$MODEL" \
         --config "model_reasoning_effort=\"$REASONING_EFFORT\"" \
+        --config 'mcp_servers.reasoning_agent.env_vars=["RETHLAS_POLICY_FILE"]' \
         --dangerously-bypass-approvals-and-sandbox \
         "$prompt"
     ) >"$log_file" 2>&1; then
@@ -277,12 +299,15 @@ for ((iter = next_iter; iter < end_iter; iter += 1)); do
       fi
     fi
 
+    prompt+=" ${research_prompt}"
+
     if (
       cd "$ROOT_DIR"
       codex exec resume "$session_id" \
         -m "$MODEL" \
         --config "model_reasoning_effort=\"$REASONING_EFFORT\"" \
         --config "web_search=\"$web_mode\"" \
+        --config 'mcp_servers.reasoning_agent.env_vars=["RETHLAS_POLICY_FILE"]' \
         --dangerously-bypass-approvals-and-sandbox \
         "$prompt"
     ) >"$log_file" 2>&1; then
@@ -298,6 +323,9 @@ for ((iter = next_iter; iter < end_iter; iter += 1)); do
   fi
 
   echo "Finished problem_id=$problem_rel iter=$iter -> $log_file"
+  if [[ -f "$verified_path" ]]; then
+    policy_command collect --policy "$RETHLAS_POLICY_FILE" --verified "$verified_path"
+  fi
 
   if [[ -e "$pause_path" ]]; then
     echo "Paused after iter=$iter because marker exists: $pause_path"
@@ -328,7 +356,11 @@ if [[ -e "$pause_path" ]]; then
   exit 0
 fi
 
-echo "Completed MAX_ITERATIONS=$MAX_ITERATIONS without verified blueprint for problem_id=$problem_rel" >&2
+if [[ "$ITERATIVE_IMPROVEMENT" -eq 1 ]]; then
+  echo "Improvement budget completed; all accepted proofs remain under results/$problem_rel/improvements/. This is not a claim of optimality." >&2
+else
+  echo "Completed MAX_ITERATIONS=$MAX_ITERATIONS without verified blueprint for problem_id=$problem_rel" >&2
+fi
 echo "Run this script again to continue from the next unused iteration." >&2
 printf "Total time: %s\n" "$(format_duration "$TOTAL")"
 exit 1

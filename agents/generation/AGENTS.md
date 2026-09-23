@@ -227,3 +227,11 @@ If `## proof` cites an external result, include in the proof text:
 - `paper_id`
 - `theorem_id`
 - `arXiv id` when applicable
+
+## Research-policy extension (2026)
+
+When the runner supplies RETHLAS_POLICY_FILE, read that JSON file and keep its original_question immutable. In mode=fixed, all exact-statement and stopping rules above apply. The verifier binds its report to this original and the exact draft; never change the question to obtain acceptance.
+
+In mode=improvement, the original question is context for successive new theorems. This section replaces the fixed-mode requirement that the final theorem reproduce the original question. Read all accepted_results in the policy, formulate a precise stronger theorem with its domain/quantifiers/hypotheses, and explain strict improvement over both original known results and the whole accepted collection. Put the new statement and comparison explanation in improvement.json with exactly statement and improvement string fields. The final theorem statement must equal this new statement. Non-mathematical appendices may follow it.
+
+Pass statement=the unchanged original_question, proof=the full draft, and improvement=that JSON object to verify_proof_service. Require accepted=true, not just a correct proof verdict. The separate verifier checks proof correctness and strict improvement. Once accepted, publish blueprint_verified.md and end the current turn. The runner archives the result and starts another generation turn within its budget. Preserve earlier accepted results. A later failed attempt cannot erase them, and inability to improve is not a proof of optimality.

@@ -14,6 +14,7 @@ import tempfile
 import uuid
 
 from .models import AdditionalFinding, Artifact, ItemCheck, ProofItem, nonblank
+from sandbox_workflow.research_contract import validate_claim, digest as baseline_digest, validate_comparison
 
 MAX_DOCUMENT = 2_000_000
 
@@ -99,6 +100,17 @@ class Store:
                     record_id TEXT NOT NULL, finding_json TEXT NOT NULL,
                     PRIMARY KEY(verification_id, record_id)
                 );
+                CREATE TABLE IF NOT EXISTS research_policies (
+                    problem_id TEXT PRIMARY KEY REFERENCES problems(problem_id), mode TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS candidate_objectives (
+                    candidate_id TEXT PRIMARY KEY REFERENCES candidates(candidate_id),
+                    claim_json TEXT NOT NULL, baseline_json TEXT NOT NULL, baseline_sha256 TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS accepted_results (
+                    problem_id TEXT NOT NULL REFERENCES problems(problem_id),
+                    candidate_id TEXT PRIMARY KEY REFERENCES candidates(candidate_id)
+                );
                 PRAGMA user_version=1;
             """)
 
@@ -130,7 +142,7 @@ class Store:
         db.execute("INSERT INTO events(problem_id,operation,data_json,created_at) VALUES (?,?,?,?)",
                    (problem_id, operation, encode(data), stamp()))
 
-    def create_problem(self, problem_id, statement, references=None, source="chat"):
+    def create_problem(self, problem_id, statement, references=None, source="chat", iterative_improvement=False):
         problem_key(problem_id)
         nonblank(statement, "statement")
         references = references or []
@@ -143,13 +155,17 @@ class Store:
             old = db.execute("SELECT * FROM problems WHERE problem_id=?", (problem_id,)).fetchone()
             if old and old["problem_sha256"] != sha:
                 raise ValueError("Problem snapshots are immutable; use a new problem_id for changed input")
+            mode = 'improvement' if iterative_improvement else 'fixed'
+            if old and self.policy(db, problem_id) != mode:
+                raise ValueError('Research policy is immutable; use a new problem_id to select iterative improvement')
             if not old:
                 db.execute("INSERT INTO problems VALUES (?,?,?,?,?,?,?,NULL)",
                            (problem_id, statement, sha, encode(references), source, stamp(), "PROVING"))
                 self.event(db, problem_id, "create_problem", {"problem_sha256": sha, "source": source})
+                db.execute('INSERT INTO research_policies VALUES (?,?)', (problem_id, mode))
         return self.context(problem_id)
 
-    def import_problem(self, problem_id):
+    def import_problem(self, problem_id, iterative_improvement=False):
         problem_key(problem_id)
         data = inside(self.root, self.root / "agents/generation/data")
         path = inside(data, data / (problem_id + ".md"))
@@ -172,7 +188,18 @@ class Store:
                 references.append({"reference_id": f"ref-{len(references)+1}",
                                    "source": str(ref.relative_to(data)), "text": text,
                                    "sha256": digest(text)})
-        return self.create_problem(problem_id, statement, references, str(path.relative_to(self.root)))
+        return self.create_problem(problem_id, statement, references, str(path.relative_to(self.root)), iterative_improvement)
+
+    @staticmethod
+    def policy(db, problem_id):
+        row = db.execute('SELECT mode FROM research_policies WHERE problem_id=?', (problem_id,)).fetchone()
+        return row[0] if row else 'fixed'
+
+    def baseline(self, db, problem_id):
+        p = self.row(db, 'problems', 'problem_id', problem_id)
+        rows = db.execute('SELECT c.candidate_id,c.candidate_sha256 FROM accepted_results a JOIN candidates c USING(candidate_id) WHERE a.problem_id=? ORDER BY a.rowid', (problem_id,)).fetchall()
+        # IDs and hashes bind immutable, paged candidates; avoid unbounded context responses.
+        return {'original_question_sha256': p['problem_sha256'], 'accepted_results': [dict(r) for r in rows]}
 
     def list_problems(self, offset=0, limit=30):
         if offset < 0 or not 1 <= limit <= 100:
@@ -186,6 +213,9 @@ class Store:
     def context(self, problem_id):
         with self.connect() as db:
             p = self.row(db, "problems", "problem_id", problem_id)
+            p['mode'] = self.policy(db, problem_id)
+            p['baseline'] = self.baseline(db, problem_id)
+            p['baseline_sha256'] = baseline_digest(p['baseline'])
             refs = json.loads(p.pop("references_json"))
             p["references"] = [{k: v for k, v in r.items() if k != "text"} for r in refs]
             p["statement"] = page(p["statement"])
@@ -207,6 +237,7 @@ class Store:
                 "REVIEWING": "Continue the separate verifier chat using get_review and read_candidate.",
                 "REVISION_REQUIRED": "Generation chat: get_review, fix all findings, submit a new candidate with parent_candidate=latest_candidate.",
                 "ACCEPTED": "Call export_accepted to save the exact accepted proof and report; no revision needed.",
+                "IMPROVING": "Export accepted results if desired. In a newly user-authorized generation run, seek a strict improvement over the original question and all accepted results.",
             }[p["state"]]
             return p
 
@@ -273,7 +304,7 @@ class Store:
             blocks.append(body)
         return "\n\n".join(blocks) + "\n"
 
-    def submit_candidate(self, problem_id, items, parent_candidate=None):
+    def submit_candidate(self, problem_id, items, parent_candidate=None, improvement=None, baseline_sha256=None):
         items = [ProofItem.model_validate(i).model_dump() for i in items]
         if not 1 <= len(items) <= 200 or len(encode(items).encode("utf-8")) > MAX_DOCUMENT:
             raise ValueError("A candidate must contain 1–200 items, totaling at most 2 MB")
@@ -292,17 +323,29 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             p = self.row(db, "problems", "problem_id", problem_id)
-            if items[-1]["statement"] != p["statement"]:
+            improving = self.policy(db, problem_id) == 'improvement'
+            baseline = self.baseline(db, problem_id)
+            if improving:
+                validate_claim(improvement)
+                if items[-1]['statement'] != improvement['statement']:
+                    raise ValueError('Main statement must equal the proposed improvement statement exactly')
+            elif improvement is not None or baseline_sha256 is not None:
+                raise ValueError('Fixed-statement problems cannot accept improvement metadata')
+            elif items[-1]["statement"] != p["statement"]:
                 raise ValueError("Main statement must exactly equal the stored original, including whitespace")
-            binding = encode({"problem_sha256": p["problem_sha256"], "items": items,
-                              "parent_candidate": parent_candidate})
+            binding_data = {"problem_sha256": p["problem_sha256"], "items": items, "parent_candidate": parent_candidate}
+            if improving:
+                binding_data.update(improvement=improvement, baseline_sha256=baseline_sha256)
+            binding = encode(binding_data)
             sha = digest(binding)
             old = db.execute("SELECT * FROM candidates WHERE problem_id=? AND candidate_sha256=?",
                              (problem_id, sha)).fetchone()
             if old:
                 return {"candidate_id": old["candidate_id"], "candidate_sha256": sha,
                         "proof_sha256": old["proof_sha256"], "replayed": True}
-            if p["state"] not in ("PROVING", "REVISION_REQUIRED"):
+            if improving and baseline_sha256 != baseline_digest(baseline):
+                raise ValueError('Stale improvement baseline; read the current problem context')
+            if p["state"] not in ("PROVING", "REVISION_REQUIRED", "IMPROVING"):
                 raise ValueError("Finish the current review before submitting another candidate")
             if parent_candidate != p["latest_candidate"]:
                 raise ValueError("parent_candidate must match the latest candidate (or null for the first)")
@@ -312,6 +355,8 @@ class Store:
             cid = "candidate-" + uuid.uuid4().hex
             db.execute("INSERT INTO candidates VALUES (?,?,?,?,?,?,?,?)", (cid, problem_id, parent_candidate,
                        sha, digest(markdown), encode(items), markdown, stamp()))
+            if improving:
+                db.execute('INSERT INTO candidate_objectives VALUES (?,?,?,?)', (cid, encode(improvement), encode(baseline), baseline_sha256))
             db.execute("UPDATE problems SET state='AWAITING_REVIEW',latest_candidate=? WHERE problem_id=?",
                        (cid, problem_id))
             self.event(db, problem_id, "submit_candidate", {"candidate_id": cid, "candidate_sha256": sha})
@@ -321,8 +366,11 @@ class Store:
     def read_candidate(self, candidate_id, item_id="", offset=0, limit=30_000):
         with self.connect() as db:
             c = self.row(db, "candidates", "candidate_id", candidate_id)
+            objective = db.execute('SELECT * FROM candidate_objectives WHERE candidate_id=?', (candidate_id,)).fetchone()
         items = json.loads(c["items_json"])
         result = {k: c[k] for k in ("candidate_id", "problem_id", "candidate_sha256", "proof_sha256", "parent_candidate")}
+        if objective:
+            result.update(improvement=json.loads(objective['claim_json']), baseline=json.loads(objective['baseline_json']), baseline_sha256=objective['baseline_sha256'])
         result["items"] = [{"item_id": i["item_id"], "kind": i["kind"],
                             "citation_ids": [r["citation_id"] for r in i["citations"]]} for i in items]
         if item_id:
@@ -440,7 +488,7 @@ class Store:
         return {"verification_id": verification_id, "checked_items": list(saved),
                 "missing_items": [key for key in items if key not in saved]}
 
-    def submit_review(self, verification_id, candidate_sha256, summary, repair_hints=""):
+    def submit_review(self, verification_id, candidate_sha256, summary, repair_hints="", improvement_assessment=None):
         nonblank(summary, "summary", 50_000)
         if not isinstance(repair_hints, str) or len(repair_hints) > 200_000:
             raise ValueError("Invalid repair_hints")
@@ -480,6 +528,15 @@ class Store:
             report = {"verification_report": {"summary": summary, "critical_errors": errors, "gaps": gaps,
                        "checked_items": ordered, "external_reference_checks": references},
                       "verdict": verdict, "repair_hints": repair_hints}
+            objective = db.execute('SELECT * FROM candidate_objectives WHERE candidate_id=?', (c['candidate_id'],)).fetchone()
+            improving = objective is not None
+            strict_gain = True
+            if improving:
+                strict_gain = validate_comparison(improvement_assessment, objective['baseline_sha256'])
+                report['improvement_assessment'] = improvement_assessment
+            elif improvement_assessment is not None:
+                raise ValueError('Unexpected improvement assessment on a fixed theorem')
+            promoted = verdict == 'correct' and strict_gain
             if r["report_json"]:
                 if json.loads(r["report_json"]) != report:
                     raise ValueError("Completed review is immutable")
@@ -489,10 +546,13 @@ class Store:
                 db.execute("UPDATE reviews SET report_json=?,completed_at=? WHERE verification_id=?",
                            (encode(report), stamp(), verification_id))
                 db.execute("UPDATE problems SET state=? WHERE problem_id=?",
-                           ("ACCEPTED" if verdict == "correct" else "REVISION_REQUIRED", c["problem_id"]))
+                           (("IMPROVING" if improving else "ACCEPTED") if promoted else "REVISION_REQUIRED", c["problem_id"]))
+                if promoted:
+                    db.execute('INSERT OR IGNORE INTO accepted_results VALUES (?,?)', (c['problem_id'], c['candidate_id']))
                 self.event(db, c["problem_id"], "submit_review", {"verification_id": verification_id, "verdict": verdict})
         return {"verification_id": verification_id, "candidate_id": c["candidate_id"], "verdict": verdict,
-                "next_action": "export_accepted" if verdict == "correct" else "Ask generation chat to get_review and revise"}
+                "accepted": promoted,
+                "next_action": ("Export this result; finish this authorized run. User opens the next generation run to improve further." if improving and promoted else "export_accepted" if promoted else "Ask generation chat to get_review and revise")}
 
     @staticmethod
     def write_once(path, text):
@@ -515,20 +575,34 @@ class Store:
         finally:
             os.unlink(temporary)
 
-    def export_accepted(self, problem_id):
+    def export_accepted(self, problem_id, candidate_id=None):
         problem_key(problem_id)
         with self.connect() as db:
             p = self.row(db, "problems", "problem_id", problem_id)
-            if p["state"] != "ACCEPTED":
-                raise ValueError("Only an accepted current candidate can be exported")
-            c = self.row(db, "candidates", "candidate_id", p["latest_candidate"])
+            improving = self.policy(db, problem_id) == 'improvement'
+            if improving:
+                accepted = db.execute('SELECT candidate_id FROM accepted_results WHERE problem_id=? ORDER BY rowid DESC', (problem_id,)).fetchall()
+                ids = [r[0] for r in accepted]
+                candidate_id = candidate_id or (ids[0] if ids else None)
+                if candidate_id not in ids:
+                    raise ValueError('Only an accepted improvement can be exported')
+            else:
+                if p['state'] != 'ACCEPTED' or candidate_id not in (None, p['latest_candidate']):
+                    raise ValueError('Only an accepted current candidate can be exported')
+                candidate_id = p['latest_candidate']
+            c = self.row(db, "candidates", "candidate_id", candidate_id)
             r = db.execute("SELECT * FROM reviews WHERE candidate_id=?", (c["candidate_id"],)).fetchone()
             if not r or not r["report_json"] or json.loads(r["report_json"])["verdict"] != "correct":
                 raise ValueError("Missing accepting review")
             if digest(c["markdown"]) != c["proof_sha256"] or r["candidate_sha256"] != c["candidate_sha256"]:
                 raise ValueError("Stored proof/review binding is inconsistent")
-            binding = encode({"problem_sha256": p["problem_sha256"], "items": json.loads(c["items_json"]),
-                              "parent_candidate": c["parent_candidate"]})
+            binding_data = {"problem_sha256": p["problem_sha256"], "items": json.loads(c["items_json"]), "parent_candidate": c["parent_candidate"]}
+            if improving:
+                objective = self.row(db, 'candidate_objectives', 'candidate_id', candidate_id)
+                binding_data.update(improvement=json.loads(objective['claim_json']), baseline_sha256=objective['baseline_sha256'])
+                if baseline_digest(json.loads(objective['baseline_json'])) != objective['baseline_sha256'] or not validate_comparison(json.loads(r['report_json'])['improvement_assessment'], objective['baseline_sha256']):
+                    raise ValueError('Invalid accepted improvement binding')
+            binding = encode(binding_data)
             if digest(binding) != c["candidate_sha256"] or self.render(json.loads(c["items_json"])) != c["markdown"]:
                 raise ValueError("Stored candidate content does not match its binding")
             manifest = {"problem_id": problem_id, "problem_sha256": p["problem_sha256"],
@@ -536,6 +610,8 @@ class Store:
                         "proof_sha256": c["proof_sha256"], "verification_id": r["verification_id"],
                         "verification_kind": "LLM review, not formal proof certification"}
         output = inside(self.root, self.root / "agents/generation/results" / problem_id)
+        if improving:
+            output = inside(self.root, output / 'improvements' / candidate_id)
         output.mkdir(parents=True, exist_ok=True)
         files = {"verification.json": json.dumps(json.loads(r["report_json"]), ensure_ascii=False, indent=2)+"\n",
                  "chatgpt_manifest.json": json.dumps(manifest, indent=2)+"\n",

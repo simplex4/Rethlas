@@ -7,12 +7,17 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from sandbox_workflow.core import verification_schema, validate_review, atomic, WorkflowError
+from sandbox_workflow.legacy import binding
+from sandbox_workflow.research_contract import validate_candidate, digest, VERIFIER_IMPROVEMENT_INSTRUCTIONS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +34,46 @@ VERIFICATION_FILENAMES = ("verification.json", "verificationt.json")
 class VerifyRequest(BaseModel):
     statement: str = Field(..., min_length=1)
     proof: str = Field(..., min_length=1)
+    research_context: Optional[Dict[str, Any]] = None
+
+
+def run_context_verification(run_id, proof, context):
+    """New bound protocol; legacy requests without a context keep their old API."""
+    mode = context['mode']
+    validate_candidate(proof, context['original_question'], mode, context.get('claim'))
+    if digest(context['baseline']) != context['baseline_sha256']:
+        raise ValueError('Invalid frozen baseline hash')
+    directory = _results_dir(run_id)
+    directory.mkdir(parents=True, exist_ok=False)
+    expected = binding(proof, context)
+    schema = directory / 'research.schema.json'
+    output = directory / 'research_verification.json'
+    atomic(schema, verification_schema(mode == 'improvement'))
+    atomic(directory / 'research_context.json', context)
+    atomic(directory / 'candidate.md', proof.encode())
+    atomic(directory / 'binding.json', expected)
+    prompt = (f'Research context verification for run {run_id}. Read results/{run_id}/research_context.json, '
+              f'candidate.md and binding.json in that same directory. Follow the mathematical checking '
+              'method in AGENTS.md. For this request return the final structured JSON matching the provided '
+              'research schema; do not use write_verification_output, whose older schema is different. '
+              'statement_sha256 binds the immutable original question, candidate_sha256 binds this proof. '
+              'The proof must establish its exact final theorem; never modify the original question. ')
+    if mode == 'improvement':
+        prompt += VERIFIER_IMPROVEMENT_INSTRUCTIONS
+    cmd = [CODEX_BIN, 'exec', '-C', str(WORK_DIR), '-m', CODEX_MODEL,
+           '--config', f'model_reasoning_effort={CODEX_REASONING_EFFORT}',
+           '--dangerously-bypass-approvals-and-sandbox', '--output-schema', str(schema),
+           '--output-last-message', str(output), prompt]
+    with _log_path(run_id).open('w') as log:
+        log.write('command: '+shlex.join(cmd)+'\n')
+        log.flush()
+        completed = subprocess.run(cmd, cwd=WORK_DIR, stdout=log, stderr=subprocess.STDOUT,
+                                   timeout=CODEX_TIMEOUT_SECONDS, check=False)
+    if completed.returncode:
+        raise ValueError(f'Verifier exited {completed.returncode}; see {_log_path(run_id)}')
+    report = json.loads(output.read_text())
+    validate_review(report, expected)
+    return report
 
 
 def _utc_timestamp() -> str:
@@ -169,6 +214,13 @@ def health() -> Dict[str, str]:
 @app.post("/verify")
 def verify(request: VerifyRequest) -> Dict[str, Any]:
     run_id = _allocate_run_id(request.statement)
+    if request.research_context is not None:
+        try:
+            if request.statement != request.research_context['original_question']:
+                raise ValueError('Original question binding mismatch')
+            return run_context_verification(run_id, request.proof, request.research_context)
+        except (ValueError, OSError, KeyError, WorkflowError, subprocess.SubprocessError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     return run_codex_verification(
         run_id=run_id,
         statement=request.statement,
