@@ -35,6 +35,9 @@ Thumbs.db
 # ChatGPT MCP state, credentials, exports, and locks
 .local/chatgpt-workflow/
 
+# Sandboxed Codex runs, exports, and capability probes
+.local/sandbox-workflow/
+
 # Agent runtime artifacts
 agents/generation/logs/
 agents/generation/memory/

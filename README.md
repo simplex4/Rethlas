@@ -1,13 +1,14 @@
-<!-- Modified in 2026 for ChatGPT MCP integration, GPT-6 Astra defaults, and resumable Codex execution. -->
+<!-- Modified in 2026 for ChatGPT MCP integration, GPT-6 Astra defaults, resumable Codex execution, and sandboxed Edu mode. -->
 
 # Rethlas
 
-Rethlas is a natural-language mathematics research workflow with two supported modes:
+Rethlas is a natural-language mathematics research workflow with three modes:
 
 - **Codex mode** runs a proof-generation agent and a separate verification service locally.
+- **Sandboxed Codex mode** uses a ChatGPT-authenticated Codex CLI with workspace-limited shell commands and files, without MCP or full-access permissions.
 - **ChatGPT MCP mode** uses two user-started ChatGPT conversations, one for generation and one for verification, with durable local state shared through MCP.
 
-Both modes preserve the original informal-proof output format. ChatGPT MCP mode does not call an inference API or launch ChatGPT by itself.
+All three modes preserve the original informal-proof output format. ChatGPT MCP mode does not call an inference API or launch ChatGPT by itself.
 
 ## Requirements
 
@@ -54,6 +55,18 @@ python -m pip install -r mcp/requirements.txt
 
 The runner alternates search-disabled and search-enabled continuation turns, writes append-only iteration logs, and stops when `results/<problem_id>/blueprint_verified.md` exists. It supports dry-run validation, pausing, and automatic continuation from existing logs. See [the Codex workflow guide](docs/codex-workflow.md).
 
+## Sandboxed Codex mode (managed Edu accounts)
+
+This mode uses Python 3.11+ and the installed Codex CLI, without third-party Python packages. It preserves managed policy and uses `workspace-write` with `on-request` approvals.
+
+```sh
+export CODEX_HOME="$HOME/.codex"
+python3 -m sandbox_workflow doctor --live
+python3 -m sandbox_workflow run --problem agents/generation/data/example.md
+```
+
+Each run prints its ID. Use `status`, `pause`, `resume`, and `export` with `--run-id` to manage it. It retains the GPT-6 Astra / max defaults, independent verification, local research memory, and search alternation. Runs are isolated from existing mode state. See [setup, capability checks, and recovery](docs/sandboxed-codex-workflow.md). Live account compatibility must be checked in the terminal that will run the workflow.
+
 ## ChatGPT MCP mode
 
 Create its isolated environment at the repository root:
@@ -97,12 +110,13 @@ See [the complete ChatGPT workflow](docs/chatgpt-workflow.md) and [run authoriza
 
 - `agents/generation/`: original Codex generation agent, skills, MCP memory server, example, runner, and site renderer
 - `agents/verification/`: original Codex verification agent and HTTP/MCP services
+- `sandbox_workflow/`: sandboxed Codex coordinator, local research commands, adapted skills, and tests
 - `chatgpt_workflow/`: production two-conversation MCP state and authorization service
 - `docs/`: setup, handoff, pause, resume, security, and export guidance
 
 ## Output and rendering
 
-Both modes export accepted proofs under `agents/generation/results/<problem_id>/`. To render results with Zola:
+The original Codex and ChatGPT MCP modes export accepted proofs under `agents/generation/results/<problem_id>/`. Sandboxed mode keeps its own results and can explicitly export to a new directory there. To render results with Zola:
 
 ```sh
 cd agents/generation
