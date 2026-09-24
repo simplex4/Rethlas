@@ -18,7 +18,7 @@ WORK_DIR = REPO_ROOT.resolve()
 RESULTS_ROOT = WORK_DIR / "results"
 
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
-CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-5.6-sol")
+CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-6-astra")
 CODEX_REASONING_EFFORT = os.getenv("CODEX_REASONING_EFFORT", "max")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "0")) or None
 VERIFICATION_FILENAMES = ("verification.json", "verificationt.json")
