@@ -1,4 +1,4 @@
-Rethlas ChatGPT MCP distribution
+Rethlas multi-mode distribution
 Based on Rethlas upstream commit 887cc46 (https://github.com/frenzymath/Rethlas).
 
 This distribution preserves the upstream Apache License, Version 2.0.
@@ -6,18 +6,24 @@ This distribution preserves the upstream Apache License, Version 2.0.
 Existing upstream files modified in 2026:
   .gitignore
   README.md
+  agents/generation/.agents/skills/verify-proof/SKILL.md
+  agents/generation/AGENTS.md
   agents/generation/.codex/config.toml
   agents/generation/.codex/agents/subgoal-prover.toml
+  agents/generation/mcp/server.py
   agents/generation/tests/run_example.sh
   agents/verification/.codex/config.toml
+  agents/verification/AGENTS.md
   agents/verification/api/server.py
 
-The modifications add ChatGPT MCP documentation and integration, GPT-6 Astra
-defaults, and dry-run, pause, and resume controls. Each modified upstream file
-carries a prominent notice stating that it was changed.
+The modifications add ChatGPT and sandboxed Codex workflows, GPT-6 Astra
+defaults, fixed-statement and iterative-improvement verification, durable local
+state, and dry-run, pause, resume, and terminal-status controls. Each modified
+upstream file carries a prominent notice stating that it was changed.
 
-New material includes chatgpt_workflow/, docs/, RELEASE_NOTES.md, and
-RELEASE_MANIFEST.md. Adapted mathematical skills record their upstream source
-paths and SHA-256 hashes in chatgpt_workflow/skills/sources.json.
+New material includes chatgpt_workflow/, sandbox_workflow/, docs/,
+RELEASE_NOTES.md, RELEASE_MANIFEST.md, and related tests. Adapted mathematical
+skills record their upstream source paths and SHA-256 hashes in
+chatgpt_workflow/skills/sources.json.
 
 This NOTICE is informational and does not modify the License.

@@ -1,4 +1,4 @@
-<!-- Modified in 2026 for ChatGPT MCP integration, GPT-6 Astra defaults, resumable Codex execution, and sandboxed Edu mode. -->
+<!-- Modified in 2026 for ChatGPT integration, GPT-6 Astra defaults, resumable Codex execution, sandboxed mode, iterative improvement, and release documentation. -->
 
 # Rethlas
 
@@ -6,9 +6,9 @@ Rethlas is a natural-language mathematics research workflow with three modes:
 
 - **Codex mode** runs a proof-generation agent and a separate verification service locally.
 - **Sandboxed Codex mode** uses a ChatGPT-authenticated Codex CLI with workspace-limited shell commands and files, without MCP or full-access permissions.
-- **ChatGPT MCP mode** uses two user-started ChatGPT conversations, one for generation and one for verification, with durable local state shared through MCP.
+- **ChatGPT mode** uses two user-started ChatGPT conversations, one for generation and one for verification, with durable local state shared through MCP.
 
-All three modes preserve the original informal-proof output format. ChatGPT MCP mode does not call an inference API or launch ChatGPT by itself.
+All three modes preserve the original informal-proof output format. ChatGPT mode does not call an inference API or launch ChatGPT by itself.
 
 ## Requirements
 
@@ -20,7 +20,16 @@ All three modes preserve the original informal-proof output format. ChatGPT MCP 
 - `pdftotext` only when using PDF references
 - Zola only when using the optional result website
 
-### ChatGPT MCP mode
+### Sandboxed Codex mode
+
+- Codex CLI, authenticated in the account that will own the run
+- Python 3.11 or newer; no third-party Python packages are required
+- a managed policy that permits `workspace-write`, `approval_policy="on-request"`,
+  and `approvals_reviewer="auto_review"`; automatic review routes eligible
+  approval requests but does not widen the sandbox or grant network access
+- `pdftotext` only when supplied references include PDFs
+
+### ChatGPT mode
 
 - Python 3.11 or newer
 - the packages in `chatgpt_workflow/requirements.txt`
@@ -55,7 +64,7 @@ python -m pip install -r mcp/requirements.txt
 
 The runner alternates search-disabled and search-enabled continuation turns, writes append-only iteration logs, and, by default, stops when `results/<problem_id>/blueprint_verified.md` exists. It supports dry-run validation, pausing, and automatic continuation from existing logs. See [the Codex workflow guide](docs/codex-workflow.md).
 
-## Sandboxed Codex mode (managed Edu accounts)
+## Sandboxed Codex mode (managed accounts)
 
 This mode uses Python 3.11+ and the installed Codex CLI, without third-party Python packages. It preserves managed policy and uses `workspace-write` with `on-request` approvals.
 
@@ -65,9 +74,16 @@ python3 -m sandbox_workflow doctor --live
 python3 -m sandbox_workflow run --problem agents/generation/data/example.md
 ```
 
-Each run prints its ID. Use `status`, `pause`, `resume`, and `export` with `--run-id` to manage it. It retains the GPT-6 Astra / max defaults, independent verification, local research memory, and search alternation. Runs are isolated from existing mode state. See [setup, capability checks, and recovery](docs/sandboxed-codex-workflow.md). Live account compatibility must be checked in the terminal that will run the workflow.
+Each run prints its settings and ID, reports generator and verifier turn boundaries, and ends with human-readable next steps. Use `status`, `pause`, `resume`, and `export` with `--run-id` to manage it. It retains the GPT-6 Astra / max defaults, independent verification, local research memory, and search alternation. Runs are isolated from existing mode state. See [setup, capability checks, and recovery](docs/sandboxed-codex-workflow.md). Live account compatibility must be checked in the terminal that will run the workflow.
 
-## ChatGPT MCP mode
+## ChatGPT mode
+
+> **Reliability warning:** ChatGPT mode may be unreliable. Tests observed safety
+> blocks, missing write tools, inaccurate final responses, and new tool calls
+> continuing after ChatGPT displayed a response saying it had stopped. Do not use
+> the response alone to decide whether to retry or start another run. Check local
+> state with `sh chatgpt_workflow/run.sh --run-status PROBLEM_ID`; see
+> [status checks and recovery](docs/chatgpt-workflow.md#reliability-and-recovery).
 
 Create its isolated environment at the repository root:
 
@@ -104,7 +120,7 @@ sh chatgpt_workflow/run.sh --transport streamable-http --port 8766
 
 The HTTP server binds to `127.0.0.1`. Keep any tunnel private and access-controlled. Every workflow call requires both the role/problem key and an active, credential-bound run ID. Finished and cancelled runs reject later calls.
 
-See [the complete ChatGPT workflow](docs/chatgpt-workflow.md) and [run authorization and research storage](docs/chatgpt-runs.md).
+See [the complete ChatGPT workflow](docs/chatgpt-workflow.md) for setup, run authorization, research storage, and recovery.
 
 ## Repository layout
 
@@ -116,7 +132,7 @@ See [the complete ChatGPT workflow](docs/chatgpt-workflow.md) and [run authoriza
 
 ## Output and rendering
 
-The original Codex and ChatGPT MCP modes export accepted proofs under `agents/generation/results/<problem_id>/`. Sandboxed mode keeps its own results and can explicitly export to a new directory there. To render results with Zola:
+The original Codex and ChatGPT modes export accepted proofs under `agents/generation/results/<problem_id>/`. Sandboxed mode keeps its own results and can explicitly export to a new directory there. To render results with Zola:
 
 ```sh
 cd agents/generation
@@ -124,10 +140,6 @@ cd agents/generation
 ```
 
 The first run downloads the MATbook theme. Open `http://localhost:3264` after Zola starts.
-
-## License
-
-This distribution is licensed under Apache License 2.0. See `LICENSE` and `NOTICE`. Existing upstream files changed by this release carry a prominent modification notice.
 
 ## Open questions and improving bounds
 
@@ -145,3 +157,7 @@ Codex runners continue generation within their iteration budgets after acceptanc
 accepted rounds are preserved. Pausing or exhausting a budget does not imply optimality.
 Sandboxed Codex now prints elapsed time every 30 seconds and total time on exit. See the
 mode-specific guides above for commands, result locations and recovery.
+
+## License
+
+This distribution is licensed under Apache License 2.0. See `LICENSE` and `NOTICE`. Existing upstream files changed by this release carry a prominent modification notice.

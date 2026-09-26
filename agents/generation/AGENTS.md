@@ -1,3 +1,5 @@
+<!-- Modified in 2026 to support immutable fixed statements and verified iterative improvements. -->
+
 # Math Reasoning Agent
 
 This agent solves research-level math problems by following a mathematician-style iterative process. The primary control logic lives in this file and in the skill `SKILL.md` files under `.agents/skills/`.

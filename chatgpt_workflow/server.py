@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 import os
+import sqlite3
 from pathlib import Path
 import sys
 from typing import Any, Literal
@@ -17,6 +18,7 @@ from .access import Access, actor
 from .library import Library, list_skills as skill_catalog, read_skill as skill_text
 from .models import AdditionalFinding, Artifact, ItemCheck, ProofItem
 from .search import search_theorems
+from .status import run_status
 from .store import Store, inside
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -260,7 +262,8 @@ def main():
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--import-problem", metavar="PROBLEM_ID")
     parser.add_argument("--iterative-improvement", action="store_true", help="Choose improvement research when creating/importing a new problem")
-    parser.add_argument("--status", metavar="PROBLEM_ID")
+    parser.add_argument("--status", metavar="PROBLEM_ID", help="Full problem context")
+    parser.add_argument("--run-status", metavar="PROBLEM_ID", help="Read-only database snapshot of runs, saved progress, and recent calls")
     parser.add_argument("--export", metavar="PROBLEM_ID")
     parser.add_argument("--issue-key", metavar="PROBLEM_ID")
     parser.add_argument("--role", choices=["generation", "verification"])
@@ -283,9 +286,16 @@ def main():
         parser.error('--iterative-improvement requires --import-problem or --create-problem')
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
-    if sum(bool(x) for x in (args.import_problem, args.status, args.export, args.issue_key,
+    if sum(bool(x) for x in (args.import_problem, args.status, args.run_status, args.export, args.issue_key,
                             args.list_keys, args.revoke_key, args.audit, args.create_problem, args.open_run, args.cancel_run, args.list_runs, args.export_research, args.import_file)) > 1:
         parser.error("Use only one local operation")
+    if args.run_status:
+        try:
+            result = run_status(ROOT, args.run_status)
+        except (ValueError, sqlite3.Error) as error:
+            parser.exit(2, f"Cannot read run status: {error}\n")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     store = Store(ROOT)
     access = Access(store)
     if args.open_run:

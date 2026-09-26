@@ -1,4 +1,5 @@
-# Modified in 2026 to exclude ChatGPT MCP credentials, workflow state, and environments.
+# Modified in 2026 to exclude local credentials, workflow state, environments,
+# temporary diagnostics, and unpublished research inputs.
 
 # Python
 __pycache__/
@@ -52,3 +53,9 @@ agents/verification/results/
 agents/generation/site/public/
 agents/generation/site/themes/
 agents/generation/site/content/*/
+
+# temporary files
+tmp/
+
+# New local problem inputs are private by default; already tracked examples remain included.
+agents/generation/data/*

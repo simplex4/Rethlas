@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Modified in 2026 to add GPT-6 Astra defaults, dry-run validation, pausing, and safe resumption.
+# Modified in 2026 to add GPT-6 Astra defaults, dry-run validation, pausing,
+# safe resumption, and independently verified iterative improvements.
 set -euo pipefail
 
-CODEX_CLI_HOME="${CODEX_CLI_HOME:-${CODEX_HOME:-$HOME/.codex-cli}}"
-export CODEX_HOME="$CODEX_CLI_HOME"
+export CODEX_HOME="${CODEX_HOME:-$HOME/.codex-cli}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROBLEM_FILE="${PROBLEM_FILE:-data/example.md}"
 MODEL="${MODEL:-gpt-6-astra}"

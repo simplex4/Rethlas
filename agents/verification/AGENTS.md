@@ -1,3 +1,5 @@
+<!-- Modified in 2026 to verify immutable fixed statements and strict improvements. -->
+
 # Proof Verification Agent
 
 This agent verifies the correctness of a mathematical proof provided in markdown format. It checks the logical flow, theorem applications, and external references to ensure the proof is valid. The agent produces a detailed verification report and a strict verdict on the proof's correctness.

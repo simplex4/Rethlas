@@ -3,6 +3,8 @@ name: verify-proof
 description: Verify candidate proofs with the local proof verification MCP service. Use only when a full candidate proof of the entire problem has been assembled in markdown, and before publishing the final verified blueprint.
 ---
 
+<!-- Modified in 2026 to enforce fixed-statement and verified-improvement policies. -->
+
 # Verify Proof
 
 Use the local proof verification service as the canonical verifier before accepting a solution.

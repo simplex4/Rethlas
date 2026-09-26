@@ -1,10 +1,11 @@
-"""Command-line entry point for the sandboxed Edu workflow."""
+"""Command-line entry point for the sandboxed managed-account workflow."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,71 @@ import uuid
 from .core import (PACKAGE, REPO, Workflow, WorkflowError, atomic, codex_home,
                    command, parse_events, read_json, settings, sha)
 from .timer import ElapsedTimer
+
+
+def terminal_progress(event, details):
+    turn = details["turn"]
+    log = details["log"]
+    action = "Starting" if event == "attempt_started" else "Finished"
+    if turn["role"] == "generator":
+        print(f"{action} iter={turn['iteration']} role=generator -> {log}", flush=True)
+    else:
+        print(f"{action} verifier attempt={turn['attempt']} -> {log}", flush=True)
+
+
+def print_run_settings(manifest, run, iterations, launch_mode):
+    config = manifest["settings"]
+    print("========================================")
+    print(f" Codex:      {config['codex_bin']}")
+    print(f" Codex home: {config['codex_home']}")
+    print(f" Generator:  {config['generator_model']}")
+    print(f" Gen effort: {config['generator_effort']}")
+    print(f" Verifier:   {config['verifier_model']}")
+    print(f" Ver effort: {config['verifier_effort']}")
+    print(f" Sandbox:    {config['sandbox']}")
+    print(f" Approval:   {config['approval_policy']}")
+    print(f" Problem:    {manifest['problem']}")
+    print(f" Run ID:     {manifest['run_id']}")
+    print(f" Mode:       {launch_mode}")
+    print(f" Policy:     {manifest.get('mode_policy', 'fixed')}")
+    if manifest.get("generator_session"):
+        print(f" Session:    {manifest['generator_session']}")
+    print(f" Next iter:  {manifest['next_iteration']}")
+    print(f" Max iters:  {iterations}")
+    print(f" Logs:       {run / 'logs'}")
+    print(f" Stop file:  {run / 'results' / 'blueprint_verified.md'}")
+    print(f" Pause file: {run / 'PAUSE_AFTER_TURN'}")
+    print("========================================")
+    print("")
+
+
+def print_run_result(result, run, iterations):
+    run_id = result["run_id"]
+    problem = result["problem"]
+    problem_path = Path(problem)
+    try:
+        problem_id = problem_path.relative_to("agents/generation/data").with_suffix("")
+    except ValueError:
+        problem_id = problem_path.with_suffix("")
+    status = result["status"]
+    if status == "accepted":
+        verified = run / "results" / "blueprint_verified.md"
+        print(f"Solved problem_id={problem_id} -> {verified}")
+        print("")
+        print("To export results, run:")
+        print(f"  python3 -m sandbox_workflow export --run-id {run_id}")
+        return
+    if status == "paused":
+        print(f"Run paused. To continue from the next unfinished turn, run:")
+        print(f"  python3 -m sandbox_workflow resume --run-id {run_id} --clear-pause --iterations {iterations}")
+        return
+    if result.get("mode_policy") == "improvement":
+        print("Improvement budget completed; all accepted proofs remain under "
+              f"{run / 'candidates'}. This is not a claim of optimality.")
+    else:
+        print(f"Completed MAX_ITERATIONS={iterations} without verified blueprint for problem_id={problem_id}")
+    print("Run the resume command below to continue from the next unused iteration:")
+    print(f"  python3 -m sandbox_workflow resume --run-id {run_id} --iterations {iterations}")
 
 
 def diagnostic(cmd, env):
@@ -126,7 +192,7 @@ def main(argv=None):
         if name == "export":
             r.add_argument("--output", help="New export directory inside repository; never overwrite")
     args = p.parse_args(argv)
-    workflow = Workflow()
+    workflow = Workflow(reporter=terminal_progress if args.command in ("run", "resume") else None)
     try:
         if args.command == "doctor":
             result = doctor(args.live)
@@ -141,16 +207,27 @@ def main(argv=None):
                 if not problem.is_file() or problem.suffix != ".md":
                     raise WorkflowError("Problem must be an existing Markdown file")
                 cwd = workflow.root / "RUN_ID" / "generation"
-                print(json.dumps({"settings": settings(), "problem": str(problem),
-                                  "mode": "improvement" if args.iterative_improvement else "fixed",
-                                  "command": command(settings(), cwd, "generator", "live", cwd / "final.txt"),
-                                  "note": "Dry run only; no files or model calls."}, indent=2))
+                config = settings()
+                manifest = {"settings": config, "problem": str(problem.relative_to(REPO)),
+                            "run_id": "RUN_ID", "next_iteration": 0,
+                            "generator_session": None,
+                            "mode_policy": "improvement" if args.iterative_improvement else "fixed"}
+                print_run_settings(manifest, workflow.root / "RUN_ID", args.iterations, "new (dry run)")
+                print("Command:")
+                print("  " + shlex.join(command(config, cwd, "generator", "live", cwd / "final.txt")))
+                print("")
+                print("Dry run only; no files or model calls were started.")
                 return 0
             run_id = workflow.create(args.problem, iterative_improvement=args.iterative_improvement)
-            print(json.dumps({"run_id": run_id, "path": str(workflow.path(run_id))}), flush=True)
+            run, manifest = workflow.load(run_id)
+            print_run_settings(manifest, run, args.iterations, "new")
             with ElapsedTimer():
                 result = workflow.resume(run_id, args.iterations)
         elif args.command == "resume":
+            run, manifest = workflow.load(args.run_id)
+            if args.iterative_improvement:
+                manifest = {**manifest, "mode_policy": "improvement"}
+            print_run_settings(manifest, run, args.iterations, "resume")
             with ElapsedTimer():
                 result = workflow.resume(args.run_id, args.iterations, args.clear_pause, args.iterative_improvement)
         elif args.command == "status":
@@ -161,12 +238,16 @@ def main(argv=None):
             result = {"run_id": args.run_id, "pause": "Will stop after the active agent turn completes"}
         else:
             result = {"export": str(workflow.export(args.run_id, args.output))}
-        print(json.dumps(result, indent=2))
         if args.command in ("run", "resume"):
+            print_run_result(result, workflow.path(result["run_id"]), args.iterations)
             return 0 if result["status"] in ("accepted", "paused") else 2
+        print(json.dumps(result, indent=2))
         return 0
     except (WorkflowError, OSError, ValueError, KeyError) as exc:
-        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        if args.command in ("run", "resume"):
+            print(f"Error: {exc}", file=sys.stderr)
+        else:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1
 
 

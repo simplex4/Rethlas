@@ -243,10 +243,15 @@ def validate_review(value, binding):
 
 
 class Workflow:
-    def __init__(self, repo=REPO, runner=invoke):
+    def __init__(self, repo=REPO, runner=invoke, reporter=None):
         self.repo = Path(repo).resolve()
         self.root = self.repo / ".local" / "sandbox-workflow" / "runs"
         self.runner = runner
+        self.reporter = reporter
+
+    def report(self, event, **details):
+        if self.reporter:
+            self.reporter(event, details)
 
     def path(self, run_id):
         if not re.fullmatch(r"[0-9a-f]{32}", run_id):
@@ -349,6 +354,7 @@ class Workflow:
             manifest["next_iteration"] += 1
         manifest["status"] = "running"
         self.save(run, manifest)
+        self.report("attempt_started", run=run, log=log, turn=turn)
         env = os.environ.copy()
         env["CODEX_HOME"] = manifest["settings"]["codex_home"]
         # Do not let API-key environment overrides change the authentication context.
@@ -356,7 +362,9 @@ class Workflow:
         env.pop("OPENAI_API_KEY", None)
         rc = self.runner(cmd, workspace, env, prompt, log / "events.jsonl", log / "stderr.log")
         atomic(log / "completion.json", {"returncode": rc})
-        return self.finish_attempt(run, manifest, attempt)
+        completed_log = self.finish_attempt(run, manifest, attempt)
+        self.report("attempt_finished", run=run, log=log, turn=turn)
+        return completed_log
 
     def finish_attempt(self, run, manifest, attempt):
         log = inside(run, attempt["log"])

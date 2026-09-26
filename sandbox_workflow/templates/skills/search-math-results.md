@@ -2,7 +2,7 @@
 
 <!-- Adapted from agents/generation/.agents/skills/search-math-results/SKILL.md. -->
 
-Use this skill for theorems, examples, constructions, counterexamples, or background. Read the target claim and relevant branch context. Read `turn.json`: `search_mode="live"` means external research is permitted; the configured built-in web search uses cached results under the Edu policy, so this label does not promise live backend freshness. Obey the actual available capability and preserve retrieval dates/source dates when relevant. If search is disabled, use existing local references and reasoning only, recording retrieval as deferred. Do not substitute built-in search, another network client, or another account for disabled or denied access.
+Use this skill for theorems, examples, constructions, counterexamples, or background. Read the target claim and relevant branch context. Read `turn.json`: `search_mode="live"` means external research is permitted; the configured built-in web search uses cached results under the managed policy, so this label does not promise live backend freshness. Obey the actual available capability and preserve retrieval dates/source dates when relevant. If search is disabled, use existing local references and reasoning only, recording retrieval as deferred. Do not substitute built-in search, another network client, or another account for disabled or denied access.
 
 1. Read provided references and query existing research first.
 2. When live search is permitted, run `python3 research.py theorem-search --query "COMPLETE MATHEMATICAL STATEMENT" --limit 5`. This is literature discovery, not evidence that a returned theorem is correct or applicable.

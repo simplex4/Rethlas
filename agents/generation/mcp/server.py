@@ -1,3 +1,5 @@
+# Modified in 2026 to bind verification to runner research policies and improvements.
+
 from __future__ import annotations
 
 import json

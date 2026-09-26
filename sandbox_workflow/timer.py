@@ -16,9 +16,16 @@ class ElapsedTimer:
 
     def __enter__(self):
         self.started = self.clock()
+        self.reported = False
+
         def report():
             while not self.stop.wait(self.interval):
-                print(f'[elapsed {duration(self.clock() - self.started)}] still running...', file=self.stream, flush=True)
+                self.stream.write(
+                    f'\r  [elapsed {duration(self.clock() - self.started)}] still running...'
+                )
+                self.stream.flush()
+                self.reported = True
+
         self.thread = threading.Thread(target=report, daemon=True)
         self.thread.start()
         return self
@@ -26,4 +33,6 @@ class ElapsedTimer:
     def __exit__(self, *args):
         self.stop.set()
         self.thread.join()
+        if self.reported:
+            self.stream.write('\n')
         print(f'Total time: {duration(self.clock() - self.started)}', file=self.stream, flush=True)

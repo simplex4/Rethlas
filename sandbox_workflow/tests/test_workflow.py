@@ -223,10 +223,10 @@ class WorkflowTests(unittest.TestCase):
         project = user_home / "Developer" / "Rethlas"
         workspace = project / ".local" / "probes" / "probe"
         personal = user_home / ".codex-cli"
-        edu = user_home / ".codex"
+        managed_home = user_home / ".codex"
         entries = {
             personal / "config.toml": "personal_only",
-            edu / "config.toml": "cua_repl",
+            managed_home / "config.toml": "cua_repl",
             user_home / "Developer" / ".codex" / "config.toml": "outside_project",
             project / ".codex" / "config.toml": "project_server",
             project / ".local" / ".codex" / "config.toml": "intermediate_server",
@@ -237,7 +237,7 @@ class WorkflowTests(unittest.TestCase):
             path.write_text(f'[mcp_servers.{name}]\ncommand="unused"\n')
         project_names = {"project_server", "intermediate_server", "workspace_server"}
         with patch("sandbox_workflow.core.REPO", project):
-            for home, own_server in ((personal, "personal_only"), (edu, "cua_repl")):
+            for home, own_server in ((personal, "personal_only"), (managed_home, "cua_repl")):
                 config = {**settings(), "codex_home": str(home)}
                 for session in (None, "existing-session"):
                     cmd = command(config, workspace, "generator", "disabled", workspace / "out", session=session)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-# Modified in 2026 to use GPT-6 Astra by default while retaining environment overrides.
+# Modified in 2026 to use GPT-6 Astra and independently verify runner-bound
+# fixed statements and iterative improvements.
 
 import hashlib
 import json

@@ -1,5 +1,6 @@
 import io
 from pathlib import Path
+import time
 import unittest
 
 from sandbox_workflow.core import WorkflowError, atomic, read_json, sha
@@ -137,4 +138,9 @@ class TimerTests(unittest.TestCase):
         stream=Stream()
         with ElapsedTimer(interval=0.001,stream=stream):
             self.assertTrue(tick.wait(1))
-        self.assertIn('[elapsed 00:00:00] still running',stream.getvalue())
+            time.sleep(0.005)
+        output=stream.getvalue()
+        self.assertIn('\r  [elapsed 00:00:00] still running',output)
+        self.assertGreaterEqual(output.count('\r'),2)
+        self.assertNotIn('still running...\n  [elapsed',output)
+        self.assertEqual(output.count('\n'),2)

@@ -70,7 +70,7 @@ If logs contain no recoverable session ID or conflicting IDs, the run fails clos
 SESSION_ID=REPLACE_WITH_SESSION_ID PROBLEM_FILE=data/example.md ./tests/run_example.sh
 ```
 
-Use `LOG_DIR` only when deliberately selecting a different log history. `CODEX_CLI_HOME` selects the Codex home used by the wrapper; it otherwise uses an existing `CODEX_HOME`, then `$HOME/.codex-cli`.
+Use `LOG_DIR` only when deliberately selecting a different log history. `CODEX_HOME` selects the Codex home used by the wrapper; it otherwise uses `$HOME/.codex-cli`.
 
 ## Pause after the active iteration
 

@@ -22,6 +22,42 @@ The mode defaults to `$HOME/.codex`, ignoring `CODEX_CLI_HOME` and the legacy ru
 
 Every invocation explicitly requests `workspace-write` and `approval_policy="on-request"`, including resumed turns. CLI 0.153.2 may still emit an exec-default `Never` warning before managed policy restores `OnRequest`; the workflow does not relax that requirement. Existing configured MCP servers are disabled for the invocation. Managed requirements and execution rules remain in force. The workflow never retries a denied operation in an unrestricted process. Noninteractive approval requests may block a run; preserve the logs and resolve permitted configuration in your terminal rather than changing to full access.
 
+### Required effective permissions
+
+The signed-in account and organization policy must allow all three settings requested
+by every generator and verifier invocation:
+
+- `sandbox_mode="workspace-write"`, so agents can create and update files inside their
+  isolated run workspaces and ordinary temporary directories;
+- `approval_policy="on-request"`, so an operation that crosses the current sandbox
+  boundary can request review instead of being forced to run with `never`; and
+- `approvals_reviewer="auto_review"`, so eligible noninteractive approval requests are
+  routed to automatic review rather than waiting for a person who cannot answer an
+  `exec`-mode prompt.
+
+These controls are cumulative. Automatic review changes the reviewer; it does not grant
+write or network access, make protected paths such as `.git/` writable, or override an
+organization deny rule. An administrator using managed requirements must therefore allow
+the workspace sandbox, the `on-request` policy, and the `auto_review` reviewer. The
+workflow passes the equivalent of:
+
+```sh
+codex --sandbox workspace-write --ask-for-approval on-request \
+  -c 'approvals_reviewer="auto_review"'
+```
+
+For search-enabled turns, the policy must also allow cached built-in web search if that
+capability is expected; direct HTTPS retrieval remains subject to the organization's
+network and approval rules. Search access is not required for the core shell/write/resume
+probe, and failed retrieval must be reported separately rather than treated as a failed
+workspace permission check. Native subagent delegation is useful but optional.
+
+See OpenAI's [sandbox and approval combinations](https://learn.chatgpt.com/docs/agent-approvals-security#sandbox-and-approvals)
+and [managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration)
+for current administrator-side policy keys and precedence. Run `doctor --live` in the
+same terminal, account, and organization policy that will own the research run; another
+account's result does not establish compatibility.
+
 ## Start, pause, and resume
 
 ```sh
@@ -32,7 +68,7 @@ python3 -m sandbox_workflow run \
   --problem agents/generation/data/example.md --iterations 10
 ```
 
-A new run snapshots the original statement and adjacent `example.refs/` directory and immediately prints its run ID. Existing research is not imported. Run state is under `.local/sandbox-workflow/runs/<run-id>/`; generator and verification workspaces have their own local instructions and skill documents.
+A new run snapshots the original statement and adjacent `example.refs/` directory, then prints its settings and run ID before starting research. The terminal reports when each generator or verifier turn starts and finishes. Existing research is not imported. Run state is under `.local/sandbox-workflow/runs/<run-id>/`; generator and verification workspaces have their own local instructions and skill documents.
 
 ```sh
 python3 -m sandbox_workflow status --run-id RUN_ID
@@ -48,7 +84,7 @@ Generator model settings for **new runs** use `MODEL` and `REASONING_EFFORT`; ve
 
 ## Research and verification
 
-Initial generator research permits external search. Search-enabled turns request cached built-in web search, which this Edu policy allows; direct theorem/PDF retrieval remains subject to network policy. Subsequent generator turns alternate independent reasoning and search-enabled work. Built-in web search is disabled on independent turns; local retrieval commands also reject calls unless `turn.json` permits live search. This is workflow enforcement, not a new operating-system network isolation boundary: agents must also obey the instruction not to use other network commands in independent turns.
+Initial generator research permits external search. Search-enabled turns request cached built-in web search when the effective managed policy allows it; direct theorem/PDF retrieval remains subject to network policy. Subsequent generator turns alternate independent reasoning and search-enabled work. Built-in web search is disabled on independent turns; local retrieval commands also reject calls unless `turn.json` permits live search. This is workflow enforcement, not a new operating-system network isolation boundary: agents must also obey the instruction not to use other network commands in independent turns.
 
 Agents use their local `research.py` for append-only memory, token-ranked memory search, branch records, checkpoints, complete candidate submission, theorem search, bounded HTTPS downloads, and PDF extraction. These commands run inside the agent sandbox. Missing sources and failed retrieval are recorded as limitations, not evidence that a mathematical result does not exist. Source downloads and exact computations should preserve provenance. Place proof-essential reproducible computation scripts, inputs, outputs, and library/version notes in `artifacts/` so they accompany a candidate.
 
@@ -78,14 +114,14 @@ They simulate Codex events and cover revision/acceptance, malformed output, hash
 
 ## Observed validation (2026-09-21)
 
-On this checkout with Codex CLI 0.153.2, Python 3.14.7, and the Edu login at `$HOME/.codex`:
+On this checkout with Codex CLI 0.153.2, Python 3.14.7, and the managed-plan login at `$HOME/.codex`:
 
 - All 24 offline tests passed; existing Codex and ChatGPT runtime files remained unchanged.
 - Live shell execution, fresh and resumed workspace writes, structured output, and same-session continuation passed.
 - The included finite-group example completed generation, a cooperative pause, resumed independent verification, acceptance, and an export whose hash matches the frozen candidate.
 - Native subgoal work was observed during generation. Maximum-depth recursive delegation was not separately exercised.
 - A separate live verifier rejected a deliberately invalid proof and published no verified file.
-- The initial theorem retrieval probe returned `403 Forbidden` followed by an approval-request failure. The user subsequently resolved this with `-c 'approvals_reviewer="auto_review"'`; this was not a ChatGPT Edu account restriction. Fresh and resumed sandbox commands include that setting. The initial doctor result remains historical evidence, not a current diagnosis.
+- The initial theorem retrieval probe returned `403 Forbidden` followed by an approval-request failure. The user subsequently resolved this with `-c 'approvals_reviewer="auto_review"'`; this was not shown to be a plan-specific restriction. Fresh and resumed sandbox commands include that setting. The initial doctor result remains historical evidence, not a current diagnosis.
 - Managed requirements permit cached built-in search but prohibit live built-in search. Source-dependent research can still be blocked; supplied references and self-contained reasoning remain usable.
 
 Local, ignored evidence is recorded in `.local/sandbox-workflow/acceptance/summary.json`, with the corresponding run and probe directories. These observations do not establish unrestricted network access or formal mathematical certification.
@@ -114,7 +150,8 @@ After acceptance, the same generator session resumes to seek the next improvemen
 `--iterations` bounds additional generation turns; pause/resume works between turns.
 Exhausting the budget leaves status `incomplete`, even if useful results were accepted;
 it is not a claim of optimality. The CLI prints elapsed time every 30 seconds and total
-invocation time on exit to stderr, keeping stdout JSON-readable.
+invocation time on exit. `run` and `resume` finish with human-readable solve, pause, or
+budget-exhaustion instructions; durable manifests and event logs remain JSON.
 
 `export` remains available while improvement research is incomplete or paused. It exports
 the latest accepted proof plus the full candidate archive to
